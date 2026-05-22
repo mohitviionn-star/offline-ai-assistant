@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+
+body {
+  @apply bg-slate-50 text-ink antialiased;
+  font-family: "Inter", ui-sans-serif, system-ui;
+}
+
+.cite-chip {
+  @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium
+         bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200
+         cursor-pointer transition-colors;
+}
+
+.cite-chip.doc { @apply bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100; }
+.cite-chip.sql { @apply bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100; }
+
+/* PDF citation highlight inside the pdf.js text layer */
+.react-pdf__Page__textContent mark.pdf-cite-hit {
+  background-color: rgba(250, 204, 21, 0.55); /* amber-400 / 55% */
+  color: transparent;
+  padding: 0;
+  border-radius: 2px;
+}

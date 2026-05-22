@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+node_modules/
+dist/
+.DS_Store
+sample_data/audit.db
+sample_data/uploads/
+sample_data/hf-cache/
+hf-space/_build/
+.pytest_cache/
+.vscode/
+.idea/
+*.log
+
+# Internal prep notes — never publish to client-facing repo
+zoom-prep.md

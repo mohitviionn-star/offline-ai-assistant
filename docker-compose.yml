@@ -1,0 +1,41 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: documents
+      SQLITE_PATH: /data/business.db
+      AUDIT_DB_PATH: /data/audit.db
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - ./sample_data:/data:rw
+      - hf_cache:/data/hf-cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  qdrant_data:
+  hf_cache:

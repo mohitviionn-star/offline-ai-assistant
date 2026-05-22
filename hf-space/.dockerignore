@@ -1,0 +1,16 @@
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/node_modules
+**/dist
+**/build
+.git
+.gitignore
+.env
+.env.*
+*.md
+!hf-space/README.md
+!hf-space/DEPLOY.md
+sample_data/hf-cache
+sample_data/uploads
+hf-space/_build
