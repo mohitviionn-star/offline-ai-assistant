@@ -149,11 +149,12 @@ function Message({ msg, onCiteClick }) {
         />
       )}
 
-      {/* Sources + meta only after the answer is composed. */}
-      {!showProgressHeader && cited.length > 0 && (
+      {/* Sources + meta block — only after streaming is fully done.
+          While tokens are still arriving the answer text is the only thing visible. */}
+      {!isStreaming && cited.length > 0 && (
         <SourcesList cited={cited} onCiteClick={onCiteClick} />
       )}
-      {!showProgressHeader && (msg.answer || msg.confidence) && (
+      {!isStreaming && (msg.answer || msg.confidence) && (
         <div className="mt-4 flex items-center gap-2 flex-wrap">
           <Badge route={msg.route} confidence={msg.confidence} latency={msg.latency_ms} fastPath={msg.fast_path} />
           {(docCites.length + sqlCites.length) > cited.length && (
