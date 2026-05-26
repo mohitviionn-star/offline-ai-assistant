@@ -246,47 +246,90 @@ function RenderAnswer({ text, cited, onCiteClick }) {
 function SourcesList({ cited, onCiteClick }) {
   return (
     <div className="mt-4 pt-3 border-t border-slate-100">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-1.5">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-2">
         Sources
       </div>
-      <ol className="space-y-1">
+      <ol className="space-y-3">
         {cited.map((entry) => {
           const cite = entry.cite;
           const isDoc = entry.kind === "doc";
           let label;
+          let bodyPreview = null;
+
           if (isDoc) {
             label = entry.label;
+            // Use the chunk snippet (first ~280 chars of the cited passage)
+            const snippet = (cite?.snippet || "").trim();
+            if (snippet) bodyPreview = snippet;
           } else {
-            // For SQL, prefer a clean human label over the truncated SQL string
-            const sql = cite?.sql || entry.label;
             const rationale = cite?.rationale;
-            label = rationale ? `Database query — ${rationale}` : `Database query`;
+            label = rationale ? `Database query — ${rationale}` : "Database query";
+            // For SQL: show a compact representation of the rows that produced this answer
+            const rows = cite?.rows_preview || [];
+            if (rows.length) {
+              bodyPreview = formatSqlRowsPreview(rows, cite?.row_count || rows.length);
+            }
           }
+
           return (
-            <li
-              key={entry.n}
-              className="flex items-start gap-2 text-[12.5px] text-slate-700 leading-snug"
-            >
+            <li key={entry.n} className="flex items-start gap-2.5">
               <span className="shrink-0 text-[10.5px] font-semibold text-slate-500 tabular-nums w-6 text-right pt-[2px]">
                 [{entry.n}]
               </span>
-              <button
-                onClick={() => cite && onCiteClick?.(cite)}
-                disabled={!cite}
-                className={`text-left flex-1 min-w-0 hover:underline ${cite ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
-                title={isDoc ? "Open PDF at cited page" : "Inspect SQL + rows"}
-              >
-                <span className="mr-1 text-[10.5px]">{isDoc ? "📄" : "⚙"}</span>
-                <span className={isDoc ? "text-indigo-800 font-medium" : "text-emerald-800 font-medium font-mono"}>
-                  {label}
-                </span>
-              </button>
+              <div className="flex-1 min-w-0">
+                <button
+                  onClick={() => cite && onCiteClick?.(cite)}
+                  disabled={!cite}
+                  className={`text-left text-[12.5px] leading-snug hover:underline ${cite ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
+                  title={isDoc ? "Open PDF at cited page" : "Inspect SQL + rows"}
+                >
+                  <span className="mr-1 text-[10.5px]">{isDoc ? "📄" : "⚙"}</span>
+                  <span className={isDoc ? "text-indigo-800 font-medium" : "text-emerald-800 font-medium font-mono"}>
+                    {label}
+                  </span>
+                </button>
+                {bodyPreview && (
+                  <div className={
+                    "mt-1 text-[12px] leading-snug border-l-2 pl-2.5 " +
+                    (isDoc
+                      ? "text-slate-600 border-indigo-200 italic"
+                      : "text-slate-700 border-emerald-200 font-mono text-[11px]")
+                  }>
+                    {bodyPreview}
+                  </div>
+                )}
+              </div>
             </li>
           );
         })}
       </ol>
     </div>
   );
+}
+
+/** Render a few SQL result rows as a compact, conversational preview.
+ *  e.g. {drug_name:"Penicillin"} → "Penicillin"
+ *       3 rows of {due_date, amount, status} → table-ish lines */
+function formatSqlRowsPreview(rows, totalCount) {
+  if (!rows.length) return null;
+  const preview = rows.slice(0, 3);
+
+  // Single column → comma-separated values
+  const cols = Object.keys(preview[0] || {});
+  if (cols.length === 1) {
+    const vals = rows.map((r) => String(r[cols[0]] ?? "—")).slice(0, 5).join(", ");
+    return totalCount > 5 ? `${vals}, … (${totalCount} total)` : vals;
+  }
+
+  // Multi-column → "col: val, col: val" per line
+  const lines = preview.map((r) =>
+    Object.entries(r).filter(([_, v]) => v !== null && v !== undefined)
+      .map(([k, v]) => `${k}: ${v}`).join(", ")
+  );
+  if (totalCount > preview.length) {
+    lines.push(`… (${totalCount - preview.length} more)`);
+  }
+  return lines.join("\n");
 }
 
 function Badge({ route, confidence, latency, fastPath }) {
