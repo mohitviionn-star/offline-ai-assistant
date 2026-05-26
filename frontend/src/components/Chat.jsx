@@ -59,7 +59,9 @@ export default function Chat({ messages, pending, onAsk, onCiteClick }) {
         {messages.map((m, i) => (
           <Message key={i} msg={m} onCiteClick={onCiteClick} />
         ))}
-        {pending && <PendingBubble />}
+        {pending && !(messages.length && messages[messages.length - 1]?.role === "assistant" && (messages[messages.length - 1]?.answer || "").length > 0) && (
+          <PendingBubble />
+        )}
         <div ref={endRef} />
       </div>
 

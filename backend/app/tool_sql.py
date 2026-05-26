@@ -24,8 +24,10 @@ def table_names() -> list[str]:
     return [r["name"] for r in rows]
 
 
-def schema_summary() -> str:
-    """Compact human-readable schema description for the LLM."""
+def schema_summary(include_samples: bool = True) -> str:
+    """Compact schema description for the LLM. Sample rows can be skipped
+    to keep the prompt short — useful for the router/plan call where the
+    LLM just needs to know which tables exist."""
     out: list[str] = []
     with _conn() as c:
         tables = c.execute(
@@ -35,12 +37,39 @@ def schema_summary() -> str:
             tname = t["name"]
             cols = c.execute(f"PRAGMA table_info({tname})").fetchall()
             col_defs = ", ".join(f"{col['name']} {col['type']}" for col in cols)
-            sample = c.execute(f"SELECT * FROM {tname} LIMIT 2").fetchall()
-            sample_rows = [dict(r) for r in sample]
-            out.append(
-                f"TABLE {tname}({col_defs})\n  sample: {json.dumps(sample_rows, default=str)}"
-            )
+            if include_samples:
+                sample = c.execute(f"SELECT * FROM {tname} LIMIT 2").fetchall()
+                sample_rows = [dict(r) for r in sample]
+                out.append(
+                    f"TABLE {tname}({col_defs})\n  sample: {json.dumps(sample_rows, default=str)}"
+                )
+            else:
+                out.append(f"TABLE {tname}({col_defs})")
     return "\n".join(out) if out else "(no tables)"
+
+
+def execute_sql(sql: str, rationale: str = "") -> dict:
+    """Execute a SELECT-only SQL string and return rows. No LLM involvement.
+    Used by router's merged plan_and_sql path."""
+    sql = (sql or "").strip().rstrip(";")
+    if not sql:
+        return {"sql": "", "rationale": rationale, "rows": [], "error": "no sql"}
+    if not _is_select_only(sql):
+        return {"sql": sql, "rationale": rationale, "rows": [], "error": "rejected: non-SELECT statement"}
+    try:
+        with _conn() as c:
+            cur = c.execute(sql)
+            cols = [d[0] for d in cur.description] if cur.description else []
+            rows = [dict(r) for r in cur.fetchmany(50)]
+    except sqlite3.Error as e:
+        return {"sql": sql, "rationale": rationale, "rows": [], "error": str(e)}
+    return {
+        "sql": sql,
+        "rationale": rationale,
+        "columns": cols,
+        "rows": rows,
+        "row_count": len(rows),
+    }
 
 
 def _is_select_only(sql: str) -> bool:

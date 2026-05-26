@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { getHealth, getSchema, ingestPdf, listDocuments, postQuery } from "./api";
+import { getHealth, getSchema, ingestPdf, listDocuments, postQuery, streamQuery } from "./api";
 import Chat from "./components/Chat.jsx";
 import PdfModal from "./components/PdfModal.jsx";
 import Sidebar from "./components/Sidebar.jsx";
@@ -36,14 +36,33 @@ export default function App() {
     if (!question.trim()) return;
     setMessages((m) => [...m, { role: "user", text: question }]);
     setPending(true);
-    try {
-      const res = await postQuery(question);
-      setMessages((m) => [...m, { role: "assistant", ...res }]);
-    } catch (e) {
-      setMessages((m) => [
+
+    // Add a placeholder assistant message that we'll mutate as tokens stream in.
+    let assistantIdx;
+    setMessages((m) => {
+      assistantIdx = m.length;
+      return [
         ...m,
-        { role: "assistant", answer: `Error: ${e.message}`, citations: [], confidence: "low" },
-      ]);
+        { role: "assistant", answer: "", citations: [], confidence: null, streaming: true },
+      ];
+    });
+
+    const update = (patch) =>
+      setMessages((m) => m.map((msg, i) => (i === assistantIdx ? { ...msg, ...patch } : msg)));
+    const appendToken = (tok) =>
+      setMessages((m) =>
+        m.map((msg, i) => (i === assistantIdx ? { ...msg, answer: (msg.answer || "") + tok } : msg))
+      );
+
+    try {
+      await streamQuery(question, {
+        onMeta: (meta) => update({ route: meta.route, rationale: meta.rationale, citations: meta.citations, evidence: meta.evidence }),
+        onToken: (tok) => appendToken(tok),
+        onDone: (done) => update({ confidence: done.confidence, latency_ms: done.latency_ms, fast_path: done.fast_path, gated: done.gated, streaming: false }),
+        onError: (e) => update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false }),
+      });
+    } catch (e) {
+      update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false });
     } finally {
       setPending(false);
     }
