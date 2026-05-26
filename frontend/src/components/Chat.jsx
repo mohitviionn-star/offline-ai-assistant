@@ -146,6 +146,7 @@ function Message({ msg, onCiteClick }) {
           text={msg.answer || ""}
           cited={cited}
           onCiteClick={onCiteClick}
+          streaming={isStreaming}
         />
       )}
 
@@ -210,7 +211,7 @@ function extractCitedInOrder(text, citations) {
   return order;
 }
 
-function RenderAnswer({ text, cited, onCiteClick }) {
+function RenderAnswer({ text, cited, onCiteClick, streaming = false }) {
   // Build a quick lookup: marker key → cited entry
   const byKey = new Map(cited.map((c) => [c.key, c]));
   const parts = [];
@@ -240,7 +241,17 @@ function RenderAnswer({ text, cited, onCiteClick }) {
   }
   if (lastIdx < text.length) parts.push(<span key={key++}>{text.slice(lastIdx)}</span>);
 
-  return <div className="text-[14px] text-ink leading-relaxed whitespace-pre-wrap">{parts}</div>;
+  return (
+    <div className="text-[14px] text-ink leading-relaxed whitespace-pre-wrap">
+      {parts}
+      {streaming && (
+        <span
+          className="inline-block w-[2px] h-[1em] align-text-bottom ml-0.5 bg-ink animate-blink-cursor"
+          aria-hidden
+        />
+      )}
+    </div>
+  );
 }
 
 function SourcesList({ cited, onCiteClick }) {
@@ -309,49 +320,61 @@ function Badge({ route, confidence, latency, fastPath }) {
   );
 }
 
-// Phrases shown in a rotating ticker while we wait for the first backend event.
-// Buckets are grouped by elapsed-time stage so we don't repeat too quickly and
-// the tone shifts the longer the user waits (acknowledging delay).
-const THINKING_PHRASES = {
-  early: [
-    "Reading your question…",
-    "Parsing what you're actually asking…",
-    "Thinking about the right approach…",
-    "Loading the schema into context…",
-    "Looking up which tables I have…",
-  ],
-  mid: [
-    "Choosing between SQL, documents, or both…",
-    "Picking the right tools for this one…",
-    "Drafting a query in my head…",
-    "Running the planner…",
-    "Deciding what to retrieve…",
-  ],
-  long: [
-    "Still working — local LLMs take a moment…",
-    "On-device inference, no cloud roundtrip…",
-    "The planner is being thorough…",
-    "Almost ready to dispatch the tools…",
-    "Wrapping up the plan…",
-  ],
-  patience: [
-    "Hang tight — composing the plan on CPU…",
-    "Slower than the cloud, but it never leaves your machine.",
-    "Quality over speed — still synthesising…",
-    "Patience pays off here. Almost there.",
-  ],
+// Phrases by phase. Headline = phase title; subline rotates through these.
+const PHASE_COPY = {
+  planning: {
+    headline: "Planning your answer",
+    sublines: [
+      "Reading your question carefully…",
+      "Loading the schema into context…",
+      "Looking at which tables and documents I have…",
+      "Deciding whether to query, read, or both…",
+      "Drafting a query in my head…",
+      "Picking the right tools for this one…",
+      "Thinking through the approach…",
+      "Mapping your question to the data…",
+    ],
+  },
+  gathering: {
+    headline: "Gathering evidence",
+    sublines: [
+      "Pulling records from your database…",
+      "Reading through the documents…",
+      "Looking for the most relevant chunks…",
+      "Embedding the search query…",
+      "Cross-referencing the sources…",
+      "Finding the citations…",
+    ],
+  },
+  composing: {
+    headline: "Composing the answer",
+    sublines: [
+      "Weaving evidence into a clean answer…",
+      "Picking the right phrasing…",
+      "Making sure every claim has a citation…",
+      "Drafting the response…",
+      "Putting it all together…",
+      "Polishing the wording…",
+      "Almost ready to write…",
+    ],
+  },
 };
 
-function pickPhrase(elapsed) {
-  // Stable pseudo-random pick per ~2.5s slot, so it shuffles but doesn't flicker
-  // on every render.
-  const slot = Math.floor(elapsed / 2.5);
-  const bucket =
-    elapsed < 7 ? THINKING_PHRASES.early :
-    elapsed < 18 ? THINKING_PHRASES.mid :
-    elapsed < 35 ? THINKING_PHRASES.long :
-    THINKING_PHRASES.patience;
-  return bucket[slot % bucket.length];
+const PATIENCE_SUBLINES = [
+  "Hang tight — running on your own machine, not in the cloud.",
+  "Quality over speed — still working…",
+  "Local LLMs are thorough. Patience pays off.",
+  "Slower than the cloud, but your data never leaves your hardware.",
+];
+
+function pickSubline(phaseKey, elapsed) {
+  // After 35s, blend in patience copy so we acknowledge the wait.
+  const phasePhrases = PHASE_COPY[phaseKey]?.sublines || [];
+  if (elapsed >= 35) {
+    const pool = [...phasePhrases, ...PATIENCE_SUBLINES];
+    return pool[Math.floor(elapsed / 3) % pool.length];
+  }
+  return phasePhrases[Math.floor(elapsed / 2.5) % phasePhrases.length];
 }
 
 function ProgressTimeline({ phase, steps, route }) {
@@ -364,70 +387,58 @@ function ProgressTimeline({ phase, steps, route }) {
 
   const elapsedInt = Math.floor(elapsed);
 
-  // Pre-plan state: show the big animated loader + rotating ticker.
-  const hasAnyEvent = !!route || steps.length > 0;
-  if (!hasAnyEvent) {
-    return (
-      <div className="mb-3 pb-4 border-b border-slate-100">
-        <div className="flex items-center gap-3">
-          <BouncingDotsLoader />
-          <div className="min-w-0">
-            <div className="text-[14px] font-semibold text-ink leading-tight">
-              Thinking
-              <AnimatedDots />
-            </div>
-            <div className="mt-1 text-[12px] text-slate-500 leading-snug truncate">
-              {pickPhrase(elapsed)}
-            </div>
-          </div>
-          <span className="ml-auto text-[10.5px] tabular-nums text-slate-400 shrink-0">
-            {elapsedInt}s
-          </span>
-        </div>
-      </div>
-    );
-  }
+  // Figure out the current phase from event state.
+  const hasPlan = !!route;
+  const sqlStep = steps.find((s) => s.kind === "sql" && s.status === "started" || s.kind === "sql" && s.status === "done");
+  const docsStep = steps.find((s) => s.kind === "docs" && s.status === "started" || s.kind === "docs" && s.status === "done");
+  const sqlDone = !!steps.find((s) => s.kind === "sql" && s.status === "done");
+  const docsDone = !!steps.find((s) => s.kind === "docs" && s.status === "done");
+  const allRetrievalDone =
+    (!sqlStep || sqlDone) &&
+    (!docsStep || docsDone) &&
+    (sqlDone || docsDone);
 
-  // Build the timeline.
+  let phaseKey;
+  if (!hasPlan) phaseKey = "planning";
+  else if (phase === "answering" || allRetrievalDone) phaseKey = "composing";
+  else phaseKey = "gathering";
+
+  // Build step list.
   const items = [];
   if (route) {
     items.push({ key: "plan", done: true, label: `Routed to ${route}` });
   }
   const sqlStarted = steps.find((s) => s.kind === "sql" && s.status === "started");
-  const sqlDone = steps.find((s) => s.kind === "sql" && s.status === "done");
+  const sqlDoneStep = steps.find((s) => s.kind === "sql" && s.status === "done");
   const docsStarted = steps.find((s) => s.kind === "docs" && s.status === "started");
-  const docsDone = steps.find((s) => s.kind === "docs" && s.status === "done");
+  const docsDoneStep = steps.find((s) => s.kind === "docs" && s.status === "done");
 
-  if (sqlStarted || sqlDone) {
+  if (sqlStarted || sqlDoneStep) {
     items.push({
       key: "sql",
-      done: !!sqlDone,
-      label: sqlDone ? "Database lookup" : "Querying database…",
-      detail: sqlDone
-        ? sqlDone.has_error
+      done: !!sqlDoneStep,
+      label: sqlDoneStep ? "Database lookup" : "Querying database",
+      detail: sqlDoneStep
+        ? sqlDoneStep.has_error
           ? "no result"
-          : `${sqlDone.row_count} row${sqlDone.row_count === 1 ? "" : "s"} found`
+          : `${sqlDoneStep.row_count} row${sqlDoneStep.row_count === 1 ? "" : "s"} found`
         : null,
     });
   }
-  if (docsStarted || docsDone) {
+  if (docsStarted || docsDoneStep) {
     items.push({
       key: "docs",
-      done: !!docsDone,
-      label: docsDone ? "Document search" : "Searching documents…",
-      detail: docsDone
-        ? `${docsDone.count} chunk${docsDone.count === 1 ? "" : "s"}` +
-          (docsDone.top_score ? ` · top score ${docsDone.top_score}` : "")
+      done: !!docsDoneStep,
+      label: docsDoneStep ? "Document search" : "Searching documents",
+      detail: docsDoneStep
+        ? `${docsDoneStep.count} chunk${docsDoneStep.count === 1 ? "" : "s"}` +
+          (docsDoneStep.top_score ? ` · top score ${docsDoneStep.top_score}` : "")
         : null,
     });
   }
-  if (phase === "answering") {
-    items.push({
-      key: "compose",
-      done: false,
-      label: "Composing answer",
-    });
-  }
+
+  const headline = PHASE_COPY[phaseKey].headline;
+  const subline = pickSubline(phaseKey, elapsed);
 
   return (
     <div className="mb-3 pb-4 border-b border-slate-100">
@@ -435,21 +446,27 @@ function ProgressTimeline({ phase, steps, route }) {
         <BouncingDotsLoader compact />
         <div className="flex-1 min-w-0">
           <div className="text-[14px] font-semibold text-ink leading-tight">
-            {phase === "answering" ? <>Composing<AnimatedDots /></> : <>Working<AnimatedDots /></>}
+            {headline}
+            <AnimatedDots />
           </div>
-          <ul className="mt-2 space-y-1">
-            {items.map((it) => (
-              <li key={it.key} className="flex items-center gap-2 text-[12px] leading-tight">
-                <StepIcon done={it.done} />
-                <span className={it.done ? "text-slate-600" : "text-slate-700 font-medium"}>
-                  {it.label}
-                </span>
-                {it.detail && (
-                  <span className="text-slate-400 text-[11px]">— {it.detail}</span>
-                )}
-              </li>
-            ))}
-          </ul>
+          <div className="mt-1 text-[12px] text-slate-500 leading-snug truncate min-h-[1em]">
+            {subline}
+          </div>
+          {items.length > 0 && (
+            <ul className="mt-2.5 space-y-1">
+              {items.map((it) => (
+                <li key={it.key} className="flex items-center gap-2 text-[12px] leading-tight">
+                  <StepIcon done={it.done} />
+                  <span className={it.done ? "text-slate-600" : "text-slate-700 font-medium"}>
+                    {it.label}
+                  </span>
+                  {it.detail && (
+                    <span className="text-slate-400 text-[11px]">— {it.detail}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <span className="text-[10.5px] tabular-nums text-slate-400 shrink-0">
           {elapsedInt}s

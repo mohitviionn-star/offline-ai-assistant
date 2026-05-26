@@ -77,6 +77,13 @@ body {
 .animate-blink-2 { animation: blink-fade 1.4s linear 0.2s  infinite; }
 .animate-blink-3 { animation: blink-fade 1.4s linear 0.4s  infinite; }
 
+/* Typing-cursor at the end of a streaming answer. */
+@keyframes blink-cursor {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.animate-blink-cursor { animation: blink-cursor 1s steps(1) infinite; }
+
 /* PDF citation highlight inside the pdf.js text layer.
    The text layer is positioned over the canvas and is normally transparent —
    we need to keep `color: transparent` so the user sees the rendered text on
