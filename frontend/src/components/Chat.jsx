@@ -162,47 +162,61 @@ function Message({ msg, onCiteClick }) {
               )}
             </div>
           )}
-          <RenderAnswer
-            text={msg.answer || ""}
-            citations={msg.citations || []}
-            onCiteClick={onCiteClick}
-          />
-          {(msg.answer || msg.confidence) && (
-            <div className="mt-3.5 flex flex-wrap items-center gap-1.5 pt-3 border-t border-slate-100">
-              <Badge route={msg.route} confidence={msg.confidence} latency={msg.latency_ms} fastPath={msg.fast_path} />
-              {docCites.map((c, i) => (
-                <button key={`d${i}`} className="cite-chip doc" onClick={() => onCiteClick?.(c)}>
-                  <span className="text-[9px]">📄</span> {c.label}
-                </button>
-              ))}
-              {sqlCites.map((c, i) => (
-                <button key={`s${i}`} className="cite-chip sql" onClick={() => onCiteClick?.(c)}>
-                  <span className="text-[9px] font-sans">⚙</span> {c.label}
-                </button>
-              ))}
-            </div>
-          )}
-          {msg.rationale && !showProgressHeader && (
-            <div className="mt-2 text-[10.5px] text-slate-400">
-              <span className="text-slate-500">router</span> · {msg.rationale}
-            </div>
-          )}
+          {(() => {
+            const cited = extractCitedInOrder(msg.answer || "", msg.citations || []);
+            return (
+              <>
+                <RenderAnswer
+                  text={msg.answer || ""}
+                  cited={cited}
+                  onCiteClick={onCiteClick}
+                />
+                {cited.length > 0 && (
+                  <SourcesList cited={cited} onCiteClick={onCiteClick} />
+                )}
+                {(msg.answer || msg.confidence) && (
+                  <div className="mt-3 flex items-center gap-2 pt-3 border-t border-slate-100">
+                    <Badge route={msg.route} confidence={msg.confidence} latency={msg.latency_ms} fastPath={msg.fast_path} />
+                    {/* Extra-evidence toggle: cited count vs total retrieved */}
+                    {(docCites.length + sqlCites.length) > cited.length && (
+                      <span className="text-[10.5px] text-slate-400">
+                        {cited.length} of {docCites.length + sqlCites.length} sources used in answer
+                      </span>
+                    )}
+                  </div>
+                )}
+                {msg.rationale && !showProgressHeader && (
+                  <div className="mt-2 text-[10.5px] text-slate-400">
+                    <span className="text-slate-500">router</span> · {msg.rationale}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       </div>
     </div>
   );
 }
 
-function RenderAnswer({ text, citations, onCiteClick }) {
-  const parts = [];
+/**
+ * Walk the answer text in order, find each [doc:...] / [sql:...] marker,
+ * dedupe (same source = same number), and resolve to the underlying citation
+ * object. Returns an ordered list: [{n, kind, label, cite}].
+ *
+ * If a marker has no matching citation (LLM made one up), the entry still
+ * appears but with cite=null so the UI can still render the inline marker.
+ */
+function extractCitedInOrder(text, citations) {
+  const seen = new Map();   // key → { n, kind, label, cite }
+  const order = [];
   const re = /\[(doc|sql):([^\]]+)\]/g;
-  let lastIdx = 0;
-  let match;
-  let key = 0;
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > lastIdx) parts.push(<span key={key++}>{text.slice(lastIdx, match.index)}</span>);
-    const kind = match[1];
-    const label = match[2].trim();
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const kind = m[1];
+    const label = m[2].trim();
+    const key = `${kind}:${label}`;
+    if (seen.has(key)) continue;
     const cite = citations.find((c) => {
       if (kind === "doc") {
         if (c.type !== "document") return false;
@@ -210,13 +224,37 @@ function RenderAnswer({ text, citations, onCiteClick }) {
       }
       return c.type === "sql";
     });
+    const entry = { n: order.length + 1, kind, label, cite, key };
+    seen.set(key, entry);
+    order.push(entry);
+  }
+  return order;
+}
+
+function RenderAnswer({ text, cited, onCiteClick }) {
+  // Build a quick lookup: marker key → cited entry
+  const byKey = new Map(cited.map((c) => [c.key, c]));
+  const parts = [];
+  const re = /\[(doc|sql):([^\]]+)\]/g;
+  let lastIdx = 0;
+  let match;
+  let key = 0;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIdx) parts.push(<span key={key++}>{text.slice(lastIdx, match.index)}</span>);
+    const k = match[1];
+    const lbl = match[2].trim();
+    const entry = byKey.get(`${k}:${lbl}`);
     parts.push(
       <button
         key={key++}
-        className={`cite-chip ${kind === "doc" ? "doc" : "sql"} mx-0.5 align-baseline`}
-        onClick={() => cite && onCiteClick?.(cite)}
+        className={`inline-flex items-baseline align-baseline px-1 mx-0.5 rounded text-[10.5px] font-semibold leading-none transition-colors
+          ${k === "doc"
+            ? "bg-indigo-100 text-indigo-800 hover:bg-indigo-200 hover:text-indigo-900"
+            : "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 hover:text-emerald-900 font-mono"}`}
+        onClick={() => entry?.cite && onCiteClick?.(entry.cite)}
+        title={entry ? `[${entry.n}] ${entry.kind === "doc" ? "📄" : "⚙"} ${lbl}` : lbl}
       >
-        <span className="text-[9px]">{kind === "doc" ? "📄" : "⚙"}</span> {label}
+        {entry ? entry.n : "?"}
       </button>
     );
     lastIdx = match.index + match[0].length;
@@ -224,6 +262,52 @@ function RenderAnswer({ text, citations, onCiteClick }) {
   if (lastIdx < text.length) parts.push(<span key={key++}>{text.slice(lastIdx)}</span>);
 
   return <div className="text-[14px] text-ink leading-relaxed whitespace-pre-wrap">{parts}</div>;
+}
+
+function SourcesList({ cited, onCiteClick }) {
+  return (
+    <div className="mt-4 pt-3 border-t border-slate-100">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-1.5">
+        Sources
+      </div>
+      <ol className="space-y-1">
+        {cited.map((entry) => {
+          const cite = entry.cite;
+          const isDoc = entry.kind === "doc";
+          let label;
+          if (isDoc) {
+            label = entry.label;
+          } else {
+            // For SQL, prefer a clean human label over the truncated SQL string
+            const sql = cite?.sql || entry.label;
+            const rationale = cite?.rationale;
+            label = rationale ? `Database query — ${rationale}` : `Database query`;
+          }
+          return (
+            <li
+              key={entry.n}
+              className="flex items-start gap-2 text-[12.5px] text-slate-700 leading-snug"
+            >
+              <span className="shrink-0 text-[10.5px] font-semibold text-slate-500 tabular-nums w-6 text-right pt-[2px]">
+                [{entry.n}]
+              </span>
+              <button
+                onClick={() => cite && onCiteClick?.(cite)}
+                disabled={!cite}
+                className={`text-left flex-1 min-w-0 hover:underline ${cite ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
+                title={isDoc ? "Open PDF at cited page" : "Inspect SQL + rows"}
+              >
+                <span className="mr-1 text-[10.5px]">{isDoc ? "📄" : "⚙"}</span>
+                <span className={isDoc ? "text-indigo-800 font-medium" : "text-emerald-800 font-medium font-mono"}>
+                  {label}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
 
 function Badge({ route, confidence, latency, fastPath }) {
