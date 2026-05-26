@@ -309,52 +309,90 @@ function Badge({ route, confidence, latency, fastPath }) {
   );
 }
 
-// Rotating "thinking" copy used while we're waiting for the first event from the
-// backend (the plan LLM call can take 5-30s before anything reports back).
-const THINKING_PHRASES = [
-  "Reading your question…",
-  "Looking at the schema…",
-  "Choosing the right tools…",
-  "Planning the query…",
-  "Almost there…",
-  "Still working — local LLMs take a moment…",
-];
+// Phrases shown in a rotating ticker while we wait for the first backend event.
+// Buckets are grouped by elapsed-time stage so we don't repeat too quickly and
+// the tone shifts the longer the user waits (acknowledging delay).
+const THINKING_PHRASES = {
+  early: [
+    "Reading your question…",
+    "Parsing what you're actually asking…",
+    "Thinking about the right approach…",
+    "Loading the schema into context…",
+    "Looking up which tables I have…",
+  ],
+  mid: [
+    "Choosing between SQL, documents, or both…",
+    "Picking the right tools for this one…",
+    "Drafting a query in my head…",
+    "Running the planner…",
+    "Deciding what to retrieve…",
+  ],
+  long: [
+    "Still working — local LLMs take a moment…",
+    "On-device inference, no cloud roundtrip…",
+    "The planner is being thorough…",
+    "Almost ready to dispatch the tools…",
+    "Wrapping up the plan…",
+  ],
+  patience: [
+    "Hang tight — composing the plan on CPU…",
+    "Slower than the cloud, but it never leaves your machine.",
+    "Quality over speed — still synthesising…",
+    "Patience pays off here. Almost there.",
+  ],
+};
+
+function pickPhrase(elapsed) {
+  // Stable pseudo-random pick per ~2.5s slot, so it shuffles but doesn't flicker
+  // on every render.
+  const slot = Math.floor(elapsed / 2.5);
+  const bucket =
+    elapsed < 7 ? THINKING_PHRASES.early :
+    elapsed < 18 ? THINKING_PHRASES.mid :
+    elapsed < 35 ? THINKING_PHRASES.long :
+    THINKING_PHRASES.patience;
+  return bucket[slot % bucket.length];
+}
 
 function ProgressTimeline({ phase, steps, route }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     const start = Date.now();
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 500);
+    const id = setInterval(() => setElapsed((Date.now() - start) / 1000), 250);
     return () => clearInterval(id);
   }, []);
 
-  // If no events yet (phase undefined or still pre-plan), show the rotating copy.
+  const elapsedInt = Math.floor(elapsed);
+
+  // Pre-plan state: show the big animated loader + rotating ticker.
   const hasAnyEvent = !!route || steps.length > 0;
   if (!hasAnyEvent) {
-    const phraseIdx = Math.min(THINKING_PHRASES.length - 1, Math.floor(elapsed / 3));
     return (
-      <div className="mb-3 pb-3 border-b border-slate-100">
-        <div className="flex items-center gap-2 text-[12px] text-slate-600">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-violet-600 animate-soft-pulse" />
-          <span className="font-medium text-slate-700">{THINKING_PHRASES[phraseIdx]}</span>
-          <span className="ml-auto text-[10.5px] tabular-nums text-slate-400">{elapsed}s</span>
+      <div className="mb-3 pb-4 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <BouncingDotsLoader />
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold text-ink leading-tight">
+              Thinking
+              <AnimatedDots />
+            </div>
+            <div className="mt-1 text-[12px] text-slate-500 leading-snug truncate">
+              {pickPhrase(elapsed)}
+            </div>
+          </div>
+          <span className="ml-auto text-[10.5px] tabular-nums text-slate-400 shrink-0">
+            {elapsedInt}s
+          </span>
         </div>
       </div>
     );
   }
 
-  // Build a timeline. Show route decision (from plan), then sql + docs steps,
-  // then the current phase ("Composing answer…" if answering).
+  // Build the timeline.
   const items = [];
   if (route) {
-    items.push({
-      key: "plan",
-      done: true,
-      label: `Routed to ${route}`,
-      detail: null,
-    });
+    items.push({ key: "plan", done: true, label: `Routed to ${route}` });
   }
-  // Find sql/docs in steps
   const sqlStarted = steps.find((s) => s.kind === "sql" && s.status === "started");
   const sqlDone = steps.find((s) => s.kind === "sql" && s.status === "done");
   const docsStarted = steps.find((s) => s.kind === "docs" && s.status === "started");
@@ -367,7 +405,7 @@ function ProgressTimeline({ phase, steps, route }) {
       label: sqlDone ? "Database lookup" : "Querying database…",
       detail: sqlDone
         ? sqlDone.has_error
-          ? "(no result)"
+          ? "no result"
           : `${sqlDone.row_count} row${sqlDone.row_count === 1 ? "" : "s"} found`
         : null,
     });
@@ -387,30 +425,62 @@ function ProgressTimeline({ phase, steps, route }) {
     items.push({
       key: "compose",
       done: false,
-      label: "Composing answer…",
-      detail: null,
+      label: "Composing answer",
     });
   }
 
   return (
-    <div className="mb-3 pb-3 border-b border-slate-100">
-      <ul className="space-y-1.5">
-        {items.map((it) => (
-          <li key={it.key} className="flex items-center gap-2 text-[12px] leading-tight">
-            <StepIcon done={it.done} />
-            <span className={it.done ? "text-slate-700" : "text-slate-700 font-medium"}>
-              {it.label}
-            </span>
-            {it.detail && (
-              <span className="text-slate-400 text-[11px]">— {it.detail}</span>
-            )}
-          </li>
-        ))}
-      </ul>
-      <div className="mt-1.5 text-[10.5px] text-slate-400 tabular-nums">
-        elapsed {elapsed}s
+    <div className="mb-3 pb-4 border-b border-slate-100">
+      <div className="flex items-start gap-3">
+        <BouncingDotsLoader compact />
+        <div className="flex-1 min-w-0">
+          <div className="text-[14px] font-semibold text-ink leading-tight">
+            {phase === "answering" ? <>Composing<AnimatedDots /></> : <>Working<AnimatedDots /></>}
+          </div>
+          <ul className="mt-2 space-y-1">
+            {items.map((it) => (
+              <li key={it.key} className="flex items-center gap-2 text-[12px] leading-tight">
+                <StepIcon done={it.done} />
+                <span className={it.done ? "text-slate-600" : "text-slate-700 font-medium"}>
+                  {it.label}
+                </span>
+                {it.detail && (
+                  <span className="text-slate-400 text-[11px]">— {it.detail}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <span className="text-[10.5px] tabular-nums text-slate-400 shrink-0">
+          {elapsedInt}s
+        </span>
       </div>
     </div>
+  );
+}
+
+function BouncingDotsLoader({ compact = false }) {
+  // Three dots that bounce in sequence — small, indigo-tinted, matches the
+  // "thinking" feel of modern assistants.
+  const size = compact ? "w-7 h-7" : "w-9 h-9";
+  const dotSize = compact ? "w-1.5 h-1.5" : "w-2 h-2";
+  return (
+    <div className={`${size} rounded-full bg-indigo-50 border border-indigo-200 flex items-center justify-center gap-0.5 shrink-0`}>
+      <span className={`${dotSize} rounded-full bg-indigo-600 animate-bounce-1`} />
+      <span className={`${dotSize} rounded-full bg-indigo-600 animate-bounce-2`} />
+      <span className={`${dotSize} rounded-full bg-indigo-600 animate-bounce-3`} />
+    </div>
+  );
+}
+
+function AnimatedDots() {
+  // Three dots that animate cyclically in the headline — like "Thinking..."
+  return (
+    <span className="inline-block ml-0.5">
+      <span className="animate-blink-1">.</span>
+      <span className="animate-blink-2">.</span>
+      <span className="animate-blink-3">.</span>
+    </span>
   );
 }
 
@@ -424,7 +494,7 @@ function StepIcon({ done }) {
   }
   return (
     <span className="inline-flex items-center justify-center w-4 h-4">
-      <span className="inline-block w-1.5 h-1.5 rounded-full bg-violet-600 animate-soft-pulse" />
+      <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-600 animate-soft-pulse" />
     </span>
   );
 }
