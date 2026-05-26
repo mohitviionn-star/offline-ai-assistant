@@ -313,35 +313,92 @@ def _deterministic_sql_answer(sql_result: dict, question: str) -> str:
         kv = ", ".join(f"{_humanize_col(k).lower()}: {_fmt_value(v, col=k)}" for k, v in r.items() if v is not None)
         return f"{kv}. {cite}"
 
-    # ---- Multi-row, multi-column: short narrative list ----
+    # ---- Multi-row, multi-column ----
+    # Build a conversational inline list, prefixed by the rationale where helpful.
+    # Each row gets compacted by detecting "natural" combinations like {amount + date}
+    # into "$X on Date" instead of "amount: X, date: Y".
     label_keys = ("full_name", "first_name", "name", "drug_name", "filename")
-    plural = "s" if row_count != 1 else ""
-    lines = [f"Found {row_count} record{plural}:"]
-    for r in rows[:10]:
-        # Pick a name to lead with
-        leader_key = next((k for k in label_keys if k in r and r[k]), None)
-        # First name + last name combined if both present
-        if leader_key == "first_name" and "last_name" in r and r["last_name"]:
-            label = f"{r['first_name']} {r['last_name']}"
-            skip = {"first_name", "last_name"}
-        elif leader_key:
-            label = str(r[leader_key])
-            skip = {leader_key}
-        else:
-            # Use the first non-null field as the lead label
-            first_nn = next((k for k, v in r.items() if v is not None), None)
-            label = _fmt_value(r[first_nn], col=first_nn) if first_nn else ""
-            skip = {first_nn} if first_nn else set()
 
-        extras = [f"{_humanize_col(k).lower()} {_fmt_value(v, col=k)}"
-                  for k, v in r.items() if k not in skip and v is not None]
-        if extras:
-            lines.append(f"• {label} — {', '.join(extras)}")
+    # Trim imperative prefixes from the LLM-generated rationale so it reads like a noun phrase.
+    rationale = (sql_result.get("rationale") or "").strip().rstrip(":.")
+    for prefix in ("list ", "show all ", "show me all ", "show ", "get all ", "get ",
+                   "retrieve ", "find ", "fetch ", "count of ", "counting "):
+        if rationale.lower().startswith(prefix):
+            rationale = rationale[len(prefix):]
+            break
+
+    def render_row(r):
+        # Prefer a name-like leader
+        leader_key = next((k for k in label_keys if k in r and r[k]), None)
+        if leader_key == "first_name" and "last_name" in r and r["last_name"]:
+            label, skip = f"{r['first_name']} {r['last_name']}", {"first_name", "last_name"}
+        elif leader_key:
+            label, skip = str(r[leader_key]), {leader_key}
         else:
-            lines.append(f"• {label}")
-    if row_count > 10:
-        lines.append(f"…and {row_count - 10} more.")
-    return "\n".join(lines) + f" {cite}"
+            label, skip = "", set()
+
+        # Detect money col + date col → render as "$X on <date>"
+        money_col = next((k for k in r if _is_money_col(k) and r[k] is not None and k not in skip), None)
+        date_col = next((k for k in r if isinstance(r[k], str) and len(r[k]) >= 10
+                         and r[k][4:5] == "-" and r[k][7:8] == "-" and k not in skip), None)
+        if money_col and date_col:
+            money = _fmt_value(r[money_col], col=money_col)
+            date = _fmt_value(r[date_col], col=date_col)
+            phrase = f"{money} on {date}"
+            skip = skip | {money_col, date_col}
+        else:
+            phrase = ""
+
+        # Any remaining non-null fields
+        tail = [f"{_humanize_col(k).lower()} {_fmt_value(v, col=k)}"
+                for k, v in r.items() if k not in skip and v is not None]
+        tail_str = ", ".join(tail)
+
+        if label and phrase and tail_str:
+            return f"{label} — {phrase}, {tail_str}"
+        if label and phrase:
+            return f"{label} — {phrase}"
+        if label and tail_str:
+            return f"{label} ({tail_str})"
+        if label:
+            return label
+        if phrase and tail_str:
+            return f"{phrase} ({tail_str})"
+        if phrase:
+            return phrase
+        return tail_str
+
+    # Drop columns that have the same value across all rows AND that value is
+    # already implied by the rationale (e.g., status='missed' when the question
+    # asked for missed payments). Keeps the output uncluttered.
+    if rows and isinstance(rows[0], dict):
+        for col_to_check in ("status", "type", "category"):
+            vals = {r.get(col_to_check) for r in rows if col_to_check in r}
+            if len(vals) == 1 and (v := next(iter(vals))) is not None:
+                if str(v).lower() in rationale.lower():
+                    for r in rows:
+                        r.pop(col_to_check, None)
+
+    items = [render_row(r) for r in rows[:10]]
+    items = [i for i in items if i]
+    overflow = row_count - len(items)
+    if overflow > 0:
+        items.append(f"and {overflow} more")
+
+    if rationale:
+        intro = rationale[:1].upper() + rationale[1:]
+    else:
+        plural = "s" if row_count != 1 else ""
+        intro = f"{row_count} record{plural}"
+
+    if len(items) == 1:
+        body = items[0]
+    elif len(items) == 2:
+        body = f"{items[0]}; {items[1]}"
+    else:
+        body = "; ".join(items[:-1]) + f"; and {items[-1]}"
+
+    return f"{intro}: {body}. {cite}"
 
 
 # ----------------------------------------------------------------------
