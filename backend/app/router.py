@@ -105,10 +105,10 @@ REFUSAL — use ONLY when neither source has relevant evidence:
 # ----------------------------------------------------------------------
 # Planning + SQL gen in ONE LLM call
 # ----------------------------------------------------------------------
-async def plan_and_sql(question: str) -> dict[str, Any]:
+async def plan_and_sql(question: str, model: str | None = None) -> dict[str, Any]:
     """Single LLM call that returns route + docs_query + sql_query (if applicable).
     Replaces the previous two-call sequence of plan() + nl_to_sql()."""
-    client = OllamaClient()
+    client = OllamaClient(model=model)
     schema = schema_summary(include_samples=False)  # terse schema — faster prefill
     user_msg = f"Database schema:\n{schema}\n\nUser question: {question}"
     resp = await client.chat(
@@ -152,8 +152,8 @@ async def plan_and_sql(question: str) -> dict[str, Any]:
 
 
 # Backwards-compat shim — keeps older imports working.
-async def plan(question: str) -> dict[str, Any]:
-    p = await plan_and_sql(question)
+async def plan(question: str, model: str | None = None) -> dict[str, Any]:
+    p = await plan_and_sql(question, model=model)
     p.setdefault("sql_question", question if p.get("route") in ("sql", "hybrid") else None)
     return p
 
@@ -237,8 +237,8 @@ def _deterministic_sql_answer(sql_result: dict, question: str) -> str:
 # ----------------------------------------------------------------------
 # Main answer pipeline
 # ----------------------------------------------------------------------
-async def answer(question: str) -> dict[str, Any]:
-    p = await plan_and_sql(question)
+async def answer(question: str, model: str | None = None) -> dict[str, Any]:
+    p = await plan_and_sql(question, model=model)
     route = p["route"]
 
     docs: list[dict] = []
@@ -287,7 +287,7 @@ async def answer(question: str) -> dict[str, Any]:
         context_blocks.append("DATABASE EVIDENCE:\n" + _format_sql_context(sql_result))
     context = "\n\n".join(context_blocks) if context_blocks else "(no evidence retrieved)"
 
-    client = OllamaClient()
+    client = OllamaClient(model=model)
     resp = await client.chat(
         messages=[
             {"role": "system", "content": ANSWER_SYSTEM},
@@ -313,17 +313,16 @@ async def answer(question: str) -> dict[str, Any]:
     }
 
 
-async def answer_stream(question: str):
+async def answer_stream(question: str, model: str | None = None):
     """Streaming version of answer(): yields (event_type, data) tuples.
     Event types:
       - 'meta'  → routing + citations + evidence (sent ONCE up front, before tokens)
       - 'token' → a string fragment of the answer (zero or more)
       - 'done'  → final confidence + latency_ms
-    The caller decides how to serialize (SSE, plain JSON lines, etc.).
     """
     import time
     t0 = time.time()
-    p = await plan_and_sql(question)
+    p = await plan_and_sql(question, model=model)
     route = p["route"]
 
     docs: list[dict] = []
@@ -370,7 +369,7 @@ async def answer_stream(question: str):
         context_blocks.append("DATABASE EVIDENCE:\n" + _format_sql_context(sql_result))
     context = "\n\n".join(context_blocks) if context_blocks else "(no evidence retrieved)"
 
-    client = OllamaClient()
+    client = OllamaClient(model=model)
     accumulated = []
     try:
         async for tok in client.chat_stream(

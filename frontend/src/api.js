@@ -1,12 +1,18 @@
 const BASE = "/api";
 
-export async function postQuery(question) {
+export async function postQuery(question, model = null) {
   const r = await fetch(`${BASE}/query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, model }),
   });
   if (!r.ok) throw new Error(`query failed: ${r.status}`);
+  return r.json();
+}
+
+export async function listModels() {
+  const r = await fetch(`${BASE}/models`);
+  if (!r.ok) return { current: null, available: [] };
   return r.json();
 }
 
@@ -18,13 +24,13 @@ export async function postQuery(question) {
  *   onDone({confidence, latency_ms, fast_path?, gated?})
  *   onError(err)
  */
-export async function streamQuery(question, { onMeta, onToken, onDone, onError } = {}) {
+export async function streamQuery(question, { model = null, onMeta, onToken, onDone, onError } = {}) {
   let r;
   try {
     r = await fetch(`${BASE}/query/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, model }),
     });
   } catch (e) {
     onError?.(e);

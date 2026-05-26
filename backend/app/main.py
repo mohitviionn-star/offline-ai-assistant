@@ -35,6 +35,7 @@ async def _startup() -> None:
 
 class QueryIn(BaseModel):
     question: str
+    model: str | None = None  # override OLLAMA_MODEL per request (e.g. "llama3.2:1b")
 
 
 @app.get("/health")
@@ -47,6 +48,34 @@ async def health() -> dict:
         "qdrant_url": settings.qdrant_url,
         "sqlite_path": settings.sqlite_path,
     }
+
+
+@app.get("/models")
+async def models() -> dict:
+    """List models available on the configured Ollama host, plus a curated
+    'tier' label so the UI can present a Fast / Balanced / Smart selector."""
+    import httpx
+    tier_map = {
+        "llama3.2:1b":     {"tier": "fast",     "label": "Fast (Llama 3.2 1B)",  "note": "~2x faster, lower quality"},
+        "llama3.2:3b":     {"tier": "balanced", "label": "Balanced (Llama 3.2 3B)", "note": "default — good speed/quality"},
+        "qwen2.5:7b":      {"tier": "smart",    "label": "Smart (Qwen 2.5 7B)",  "note": "best quality, ~2x slower"},
+        "llama3.1:8b":     {"tier": "smart",    "label": "Smart (Llama 3.1 8B)", "note": "best quality, ~2x slower"},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{settings.ollama_url.rstrip('/')}/api/tags")
+            r.raise_for_status()
+            installed = [m["name"] for m in r.json().get("models", [])]
+    except Exception as e:
+        return {"current": settings.ollama_model, "available": [], "error": str(e)}
+
+    # Surface only chat-capable models (skip embedding models)
+    chat = [m for m in installed if not m.startswith("nomic-embed")]
+    enriched = [
+        {"name": m, **(tier_map.get(m, {"tier": "other", "label": m, "note": ""}))}
+        for m in chat
+    ]
+    return {"current": settings.ollama_model, "available": enriched}
 
 
 @app.get("/schema")
@@ -84,9 +113,10 @@ async def get_document(filename: str) -> FileResponse:
 @app.post("/query")
 async def query(body: QueryIn) -> dict:
     t0 = time.time()
-    result = await run_answer(body.question)
+    result = await run_answer(body.question, model=body.model)
     latency = int((time.time() - t0) * 1000)
     result["latency_ms"] = latency
+    result["model_used"] = body.model or settings.ollama_model
     audit.log_query(body.question, result, latency)
     return result
 
@@ -104,7 +134,7 @@ async def query_stream(body: QueryIn):
         meta_payload = {}
         done_payload = {}
         try:
-            async for event_type, payload in run_answer_stream(body.question):
+            async for event_type, payload in run_answer_stream(body.question, model=body.model):
                 if event_type == "meta":
                     meta_payload = payload
                     yield f"event: meta\ndata: {json.dumps(payload, default=str)}\n\n"
