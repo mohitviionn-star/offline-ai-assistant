@@ -419,6 +419,7 @@ async def answer_stream(question: str, model: str | None = None):
 def _build_citations(docs: list[dict], sql_result: dict) -> list[dict]:
     cites: list[dict] = []
     for d in docs:
+        full_text = d.get("text", "")
         cites.append(
             {
                 "type": "document",
@@ -426,7 +427,8 @@ def _build_citations(docs: list[dict], sql_result: dict) -> list[dict]:
                 "doc_id": d.get("doc_id"),
                 "filename": d.get("filename"),
                 "page": d.get("page"),
-                "snippet": d["text"][:280],
+                "snippet": full_text[:280],            # short preview (UI uses this in lists)
+                "chunk_text": full_text,                # full chunk text — drives PDF highlighting
             }
         )
     if sql_result and sql_result.get("sql"):

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -6,9 +6,17 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-const PDF_OPTIONS = {
-  // pdf.js options can go here if needed
-};
+const PDF_OPTIONS = {};
+
+// Normalize text for matching: lowercase, strip non-alphanumeric to spaces,
+// collapse whitespace. Same normalization for both the chunk and the PDF text items.
+function norm(s) {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export default function PdfModal({ source, onClose }) {
   if (!source) return null;
@@ -17,10 +25,16 @@ export default function PdfModal({ source, onClose }) {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(source.page || 1);
   const [error, setError] = useState(null);
+  const [matchCount, setMatchCount] = useState(0);
+  const pageContainerRef = useRef(null);
+
+  // Use the full chunk text if backend sent it, otherwise fall back to snippet.
+  const chunkText = source.chunk_text || source.snippet || "";
 
   useEffect(() => {
     setPageNumber(source.page || 1);
     setError(null);
+    setMatchCount(0);
   }, [source]);
 
   useEffect(() => {
@@ -34,38 +48,52 @@ export default function PdfModal({ source, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [numPages, onClose]);
 
-  // Build a normalized list of phrases from the snippet for highlighting
-  const highlightPhrases = useMemo(() => {
-    const snippet = (source.snippet || "").trim();
-    if (!snippet) return [];
-    // Pick a handful of distinctive multi-word phrases (4-10 words) from the snippet.
-    // pdf.js text-layer items are broken on spaces, so highlight at the phrase level
-    // by matching each text item that appears in any phrase.
-    const cleaned = snippet
-      .replace(/\s+/g, " ")
-      .replace(/[\(\)\[\]"']/g, "");
-    const words = cleaned.split(" ").filter((w) => w.length > 0);
-    const phrases = [];
-    for (let i = 0; i < words.length; i += 5) {
-      const slice = words.slice(i, i + 7).join(" ");
-      if (slice.length >= 12) phrases.push(slice.toLowerCase());
-    }
-    return phrases;
-  }, [source.snippet]);
+  // Build the highlight predicate from the full chunk text once.
+  // Strategy: take the normalized chunk as a string. For each pdf.js text item,
+  // ask if a meaningful slice of it (>= 8 normalized chars) is a substring of
+  // the normalized chunk. This catches multi-word segments without false-firing
+  // on common single words.
+  const isHit = useMemo(() => {
+    const normChunk = norm(chunkText);
+    if (normChunk.length < 12) return null;
+    return (str) => {
+      const n = norm(str);
+      if (n.length < 6) return false;        // too short to be meaningful
+      if (n.length <= 20) {
+        // whole item must appear in chunk
+        return normChunk.includes(n);
+      }
+      // for long items, accept if a substantial prefix appears
+      return normChunk.includes(n.slice(0, Math.min(40, n.length)));
+    };
+  }, [chunkText]);
 
+  // Track count of matches as we render, and after the page renders, scroll
+  // the first match into view.
+  const matchCountThisRender = useRef(0);
   const customTextRenderer = useMemo(() => {
-    if (!highlightPhrases.length) return undefined;
+    if (!isHit) return undefined;
+    matchCountThisRender.current = 0;
     return ({ str }) => {
-      const lower = str.toLowerCase();
-      const hit = highlightPhrases.some(
-        (p) => p.includes(lower.trim()) && lower.trim().length >= 3
-      );
-      if (hit) {
-        return `<mark class="pdf-cite-hit">${escapeHtml(str)}</mark>`;
+      if (isHit(str)) {
+        matchCountThisRender.current += 1;
+        const idx = matchCountThisRender.current;
+        return `<mark class="pdf-cite-hit" data-cite-hit="${idx}">${escapeHtml(str)}</mark>`;
       }
       return escapeHtml(str);
     };
-  }, [highlightPhrases]);
+  }, [isHit]);
+
+  // After the page renders, scroll to the first highlighted item.
+  function onPageRenderSuccess() {
+    setMatchCount(matchCountThisRender.current);
+    requestAnimationFrame(() => {
+      const first = pageContainerRef.current?.querySelector('mark[data-cite-hit="1"]');
+      if (first) {
+        first.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  }
 
   return (
     <div
@@ -82,6 +110,14 @@ export default function PdfModal({ source, onClose }) {
             <div className="text-xs text-slate-500">
               page {pageNumber}
               {numPages ? ` of ${numPages}` : ""} · cited p.{source.page}
+              {matchCount > 0 && (
+                <>
+                  {" · "}
+                  <span className="text-amber-700 font-medium">
+                    {matchCount} highlighted match{matchCount !== 1 ? "es" : ""}
+                  </span>
+                </>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -103,6 +139,15 @@ export default function PdfModal({ source, onClose }) {
             >
               ▶
             </button>
+            {pageNumber !== source.page && (
+              <button
+                className="ml-1 px-2 py-1 text-[11px] rounded bg-amber-100 text-amber-800 border border-amber-200 hover:bg-amber-200"
+                onClick={() => setPageNumber(source.page)}
+                aria-label="jump to cited page"
+              >
+                ↩ cited p.{source.page}
+              </button>
+            )}
             <button
               className="ml-3 px-2 py-1 text-sm rounded hover:bg-slate-100 text-slate-600"
               onClick={onClose}
@@ -113,7 +158,10 @@ export default function PdfModal({ source, onClose }) {
           </div>
         </header>
 
-        <div className="flex-1 overflow-auto bg-slate-100 flex items-start justify-center p-6">
+        <div
+          ref={pageContainerRef}
+          className="flex-1 overflow-auto bg-slate-100 flex items-start justify-center p-6"
+        >
           {error ? (
             <div className="text-sm text-rose-600 mt-12">Failed to load PDF: {error}</div>
           ) : (
@@ -128,6 +176,7 @@ export default function PdfModal({ source, onClose }) {
                 pageNumber={pageNumber}
                 width={Math.min(820, window.innerWidth * 0.85)}
                 customTextRenderer={customTextRenderer}
+                onRenderSuccess={onPageRenderSuccess}
                 renderAnnotationLayer={false}
                 className="shadow-md"
               />
@@ -136,11 +185,12 @@ export default function PdfModal({ source, onClose }) {
         </div>
 
         <footer className="px-5 py-3 border-t border-slate-200 bg-slate-50">
-          <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">
-            Matched snippet
+          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-1">
+            Cited chunk
           </div>
-          <div className="text-sm text-slate-800 leading-snug max-h-24 overflow-auto">
+          <div className="text-[13px] text-slate-800 leading-snug max-h-24 overflow-auto">
             {source.snippet}
+            {chunkText.length > (source.snippet?.length || 0) && <span className="text-slate-400">…</span>}
           </div>
         </footer>
       </div>

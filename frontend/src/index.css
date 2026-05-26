@@ -59,10 +59,22 @@ body {
 }
 .animate-soft-pulse { animation: soft-pulse 1.6s ease-in-out infinite; }
 
-/* PDF citation highlight inside the pdf.js text layer */
+/* PDF citation highlight inside the pdf.js text layer.
+   The text layer is positioned over the canvas and is normally transparent —
+   we need to keep `color: transparent` so the user sees the rendered text on
+   the canvas (not the text-layer overlay), but the background + outline make
+   the highlight visible. */
 .react-pdf__Page__textContent mark.pdf-cite-hit {
-  background-color: rgba(250, 204, 21, 0.55);
+  background-color: rgba(250, 204, 21, 0.45);   /* amber-400 / 45% */
   color: transparent;
   padding: 0;
   border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.45) inset; /* subtle amber outline */
+}
+
+/* The very first match gets a slightly stronger treatment so the user's eye
+   lands on it after auto-scroll. */
+.react-pdf__Page__textContent mark.pdf-cite-hit[data-cite-hit="1"] {
+  background-color: rgba(250, 204, 21, 0.65);
+  box-shadow: 0 0 0 1.5px rgba(180, 83, 9, 0.7) inset;
 }
