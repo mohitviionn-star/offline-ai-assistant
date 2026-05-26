@@ -19,8 +19,13 @@ export default function App() {
   const fileRef = useRef(null);
 
   function handleCiteClick(c) {
-    if (c?.type === "document") setPdfModal(c);
-    else setActiveSource(c);
+    // Both docs and SQL open in the right-side evidence panel.
+    // The panel exposes an "Open PDF" button for the full document viewer.
+    setActiveSource(c);
+  }
+
+  function openFullPdf(c) {
+    setPdfModal(c);
   }
 
   async function refresh() {
@@ -174,7 +179,7 @@ export default function App() {
             onCiteClick={handleCiteClick}
           />
         </div>
-        <SourcePanel source={activeSource} onClose={() => setActiveSource(null)} />
+        <SourcePanel source={activeSource} onClose={() => setActiveSource(null)} onOpenPdf={openFullPdf} />
       </main>
       <PdfModal source={pdfModal} onClose={() => setPdfModal(null)} />
     </div>
