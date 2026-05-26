@@ -59,6 +59,7 @@ export default function App() {
         m.map((msg, i) => (i === assistantIdx ? { ...msg, answer: (msg.answer || "") + tok } : msg))
       );
 
+    const t0 = Date.now();
     try {
       await streamQuery(question, {
         model: selectedModel,
@@ -67,8 +68,18 @@ export default function App() {
           rationale: plan.rationale,
           plannedSql: plan.sql_query,
           plannedDocsQuery: plan.docs_query,
-          phase: "retrieving",  // route is known; SQL + docs still running
+          phase: "retrieving",
+          steps: [{ kind: "plan", status: "done", t: Date.now() - t0 }],
         }),
+        onStep: (step) =>
+          setMessages((m) =>
+            m.map((msg, i) => {
+              if (i !== assistantIdx) return msg;
+              const steps = msg.steps ? [...msg.steps] : [];
+              steps.push({ ...step, t: Date.now() - t0 });
+              return { ...msg, steps };
+            })
+          ),
         onMeta: (meta) => update({
           route: meta.route,
           rationale: meta.rationale,

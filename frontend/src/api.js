@@ -19,13 +19,14 @@ export async function listModels() {
 /**
  * Streaming version. Consumes Server-Sent Events from /api/query/stream.
  * Callbacks fire in this order:
- *   onPlan({route, rationale, sql_query, sql_rationale, docs_query})  — right after step 1 (early UI render)
+ *   onPlan({route, rationale, sql_query, sql_rationale, docs_query})  — step 1 done (early UI render)
+ *   onStep({kind, status, ...})                                       — per-phase progress (sql/docs start/done)
  *   onMeta({route, rationale, citations, evidence})                    — after SQL exec + Qdrant search
  *   onToken(text)                                                      — answer fragments
  *   onDone({confidence, latency_ms, fast_path?, gated?})
  *   onError(err)
  */
-export async function streamQuery(question, { model = null, onPlan, onMeta, onToken, onDone, onError } = {}) {
+export async function streamQuery(question, { model = null, onPlan, onStep, onMeta, onToken, onDone, onError } = {}) {
   let r;
   try {
     r = await fetch(`${BASE}/query/stream`, {
@@ -58,6 +59,7 @@ export async function streamQuery(question, { model = null, onPlan, onMeta, onTo
     let parsed;
     try { parsed = JSON.parse(data); } catch { return; }
     if (event === "plan") onPlan?.(parsed);
+    else if (event === "step") onStep?.(parsed);
     else if (event === "meta") onMeta?.(parsed);
     else if (event === "token") onToken?.(parsed.text || "");
     else if (event === "done") onDone?.(parsed);

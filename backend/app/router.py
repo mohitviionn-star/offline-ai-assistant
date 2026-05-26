@@ -519,18 +519,52 @@ async def answer_stream(question: str, model: str | None = None):
 
     # --- Step 2 + 3: SQL execution + Qdrant search IN PARALLEL ---
     # SQL is fast (<100ms), embedding-search is slow (~1-9s). Running them
-    # concurrently saves the SQL time on hybrid queries.
+    # concurrently saves time, and we yield a `step` event AS EACH ONE finishes
+    # so the UI can show live progress checkmarks.
+    sql_result: dict = {}
+    docs: list[dict] = []
+    wants_sql = route in ("sql", "hybrid") and bool(p.get("sql_query"))
+    wants_docs = route in ("docs", "hybrid") and bool(p.get("docs_query"))
+
+    # Announce what we're about to do
+    if wants_sql:
+        yield ("step", {"kind": "sql", "status": "started"})
+    if wants_docs:
+        yield ("step", {"kind": "docs", "status": "started"})
+
     async def _do_sql():
-        if route in ("sql", "hybrid") and p.get("sql_query"):
-            return await asyncio.to_thread(execute_sql, p["sql_query"], p.get("sql_rationale", ""))
-        return {}
+        return await asyncio.to_thread(execute_sql, p["sql_query"], p.get("sql_rationale", ""))
 
     async def _do_docs():
-        if route in ("docs", "hybrid") and p.get("docs_query"):
-            return await asyncio.to_thread(search_documents, p["docs_query"])
-        return []
+        return await asyncio.to_thread(search_documents, p["docs_query"])
 
-    sql_result, docs = await asyncio.gather(_do_sql(), _do_docs())
+    pending: set[asyncio.Task] = set()
+    if wants_sql:
+        pending.add(asyncio.create_task(_do_sql(), name="sql"))
+    if wants_docs:
+        pending.add(asyncio.create_task(_do_docs(), name="docs"))
+
+    while pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            name = task.get_name()
+            if name == "sql":
+                sql_result = task.result()
+                yield ("step", {
+                    "kind": "sql",
+                    "status": "done",
+                    "row_count": sql_result.get("row_count", 0),
+                    "has_error": bool(sql_result.get("error")),
+                })
+            elif name == "docs":
+                docs = task.result()
+                top_score = max((d.get("score", 0) for d in docs), default=0)
+                yield ("step", {
+                    "kind": "docs",
+                    "status": "done",
+                    "count": len(docs),
+                    "top_score": round(float(top_score), 3),
+                })
 
     strong_docs = bool(docs) and any(d.get("score", 0) >= DOC_SCORE_FLOOR for d in docs)
     strong_sql = bool(sql_result.get("sql")) and not sql_result.get("error") and sql_result.get("row_count", 0) > 0

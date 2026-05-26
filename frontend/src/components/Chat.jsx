@@ -131,29 +131,16 @@ function Message({ msg, onCiteClick }) {
 
   const isStreaming = !!msg.streaming;
   const phase = msg.phase;
-  const showProgressHeader = isStreaming && msg.route && !(msg.answer && msg.answer.length > 0);
+  // Show progress timeline while streaming AND answer text hasn't started yet.
+  // Also show it during the silent pre-plan wait (no route, no steps yet).
+  const showProgressHeader = isStreaming && !(msg.answer && msg.answer.length > 0);
 
   return (
     <div className="flex justify-start">
       <div className="max-w-3xl w-full">
         <div className="surface rounded-md p-4">
           {showProgressHeader && (
-            <div className="mb-3 pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2 text-[11px]">
-                <span className="inline-flex items-center gap-1.5 text-slate-600">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-violet-600 animate-soft-pulse" />
-                  <span className="text-slate-700 font-medium">
-                    {phase === "retrieving"
-                      ? (msg.plannedSql || msg.plannedDocsQuery
-                          ? "Looking up records and policies…"
-                          : "Searching documents…")
-                      : phase === "answering"
-                      ? "Composing answer…"
-                      : "Thinking…"}
-                  </span>
-                </span>
-              </div>
-            </div>
+            <ProgressTimeline phase={phase} steps={msg.steps || []} route={msg.route} />
           )}
           {(() => {
             const cited = extractCitedInOrder(msg.answer || "", msg.citations || []);
@@ -321,6 +308,126 @@ function Badge({ route, confidence, latency, fastPath }) {
       {fastPath && (
         <span className="inline-block px-1 py-0.5 ml-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-bold tracking-wide">FP</span>
       )}
+    </span>
+  );
+}
+
+// Rotating "thinking" copy used while we're waiting for the first event from the
+// backend (the plan LLM call can take 5-30s before anything reports back).
+const THINKING_PHRASES = [
+  "Reading your question…",
+  "Looking at the schema…",
+  "Choosing the right tools…",
+  "Planning the query…",
+  "Almost there…",
+  "Still working — local LLMs take a moment…",
+];
+
+function ProgressTimeline({ phase, steps, route }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const start = Date.now();
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 500);
+    return () => clearInterval(id);
+  }, []);
+
+  // If no events yet (phase undefined or still pre-plan), show the rotating copy.
+  const hasAnyEvent = !!route || steps.length > 0;
+  if (!hasAnyEvent) {
+    const phraseIdx = Math.min(THINKING_PHRASES.length - 1, Math.floor(elapsed / 3));
+    return (
+      <div className="mb-3 pb-3 border-b border-slate-100">
+        <div className="flex items-center gap-2 text-[12px] text-slate-600">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-violet-600 animate-soft-pulse" />
+          <span className="font-medium text-slate-700">{THINKING_PHRASES[phraseIdx]}</span>
+          <span className="ml-auto text-[10.5px] tabular-nums text-slate-400">{elapsed}s</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Build a timeline. Show route decision (from plan), then sql + docs steps,
+  // then the current phase ("Composing answer…" if answering).
+  const items = [];
+  if (route) {
+    items.push({
+      key: "plan",
+      done: true,
+      label: `Routed to ${route}`,
+      detail: null,
+    });
+  }
+  // Find sql/docs in steps
+  const sqlStarted = steps.find((s) => s.kind === "sql" && s.status === "started");
+  const sqlDone = steps.find((s) => s.kind === "sql" && s.status === "done");
+  const docsStarted = steps.find((s) => s.kind === "docs" && s.status === "started");
+  const docsDone = steps.find((s) => s.kind === "docs" && s.status === "done");
+
+  if (sqlStarted || sqlDone) {
+    items.push({
+      key: "sql",
+      done: !!sqlDone,
+      label: sqlDone ? "Database lookup" : "Querying database…",
+      detail: sqlDone
+        ? sqlDone.has_error
+          ? "(no result)"
+          : `${sqlDone.row_count} row${sqlDone.row_count === 1 ? "" : "s"} found`
+        : null,
+    });
+  }
+  if (docsStarted || docsDone) {
+    items.push({
+      key: "docs",
+      done: !!docsDone,
+      label: docsDone ? "Document search" : "Searching documents…",
+      detail: docsDone
+        ? `${docsDone.count} chunk${docsDone.count === 1 ? "" : "s"}` +
+          (docsDone.top_score ? ` · top score ${docsDone.top_score}` : "")
+        : null,
+    });
+  }
+  if (phase === "answering") {
+    items.push({
+      key: "compose",
+      done: false,
+      label: "Composing answer…",
+      detail: null,
+    });
+  }
+
+  return (
+    <div className="mb-3 pb-3 border-b border-slate-100">
+      <ul className="space-y-1.5">
+        {items.map((it) => (
+          <li key={it.key} className="flex items-center gap-2 text-[12px] leading-tight">
+            <StepIcon done={it.done} />
+            <span className={it.done ? "text-slate-700" : "text-slate-700 font-medium"}>
+              {it.label}
+            </span>
+            {it.detail && (
+              <span className="text-slate-400 text-[11px]">— {it.detail}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="mt-1.5 text-[10.5px] text-slate-400 tabular-nums">
+        elapsed {elapsed}s
+      </div>
+    </div>
+  );
+}
+
+function StepIcon({ done }) {
+  if (done) {
+    return (
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-700 text-[10px]">
+        ✓
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center justify-center w-4 h-4">
+      <span className="inline-block w-1.5 h-1.5 rounded-full bg-violet-600 animate-soft-pulse" />
     </span>
   );
 }
