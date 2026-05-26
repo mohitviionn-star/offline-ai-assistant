@@ -1,10 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
 
 const SAMPLE_PROMPTS = [
-  "Which leases expire in the next 6 months and what does the handbook say about renewal notice?",
-  "How much rent did Devon Patel pay in the last 3 months, and what's the late fee policy?",
-  "Are pets allowed and how many active tenants do we have?",
-  "What's the security deposit policy for a 2-year lease?",
+  // Nursing home (SNF) — residents/admissions/medications + clinical SOPs
+  "Does Robert Miller have physical therapy approval, and what does our protocol say about PT eligibility?",
+  "Which residents are currently on insulin AND have a fall-risk history, and what is our insulin administration protocol?",
+  "What medications is Robert Miller allergic to?",
+  // Legal — divorce: clients/cases/payments + custody/mediation SOPs
+  "Does Sarah Klein's custody agreement allow overnight travel outside Illinois, and what does our custody SOP say about travel restrictions?",
+  "Show all missed alimony payments for Michael Rosenberg and retrieve the enforcement procedure from our settlement SOP.",
+  // Legal — personal injury: treatments/cases + case strategy SOPs
+  "Did Robert Diaz miss any treatment appointments, and what does our case strategy memo say about treatment gaps?",
+  "Which clients have upcoming statute-of-limitations deadlines, and what does our PI strategy say about SOL?",
+  // Real estate — properties + landlord-tenant law
+  "Which property has the highest current value, and what does the landlord-tenant handbook say about security deposits?",
 ];
 
 export default function Chat({ messages, pending, onAsk, onCiteClick }) {

@@ -34,7 +34,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:80"
+      - "5174:80"
 
 volumes:
   qdrant_data:

@@ -16,3 +16,8 @@ hf-space/_build/
 
 # Internal prep notes — never publish to client-facing repo
 zoom-prep.md
+
+# Big upstream datasets — re-download with scripts if needed
+sample_data/jenny-sources/hipaa/mitre-sample.zip
+sample_data/business_multidomain.db
+sample_data/jenny-sources/accounting/
