@@ -8,14 +8,46 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const PDF_OPTIONS = {};
 
-// Normalize text for matching: lowercase, strip non-alphanumeric to spaces,
-// collapse whitespace. Same normalization for both the chunk and the PDF text items.
-function norm(s) {
-  return (s || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+/**
+ * Find the chunk's actual byte range within the concatenated page text.
+ * Both strings are "packed" (lowercased, whitespace stripped) so that small
+ * whitespace differences between the cited chunk (extracted by pypdf) and the
+ * page text (extracted by pdf.js) don't break matching.
+ *
+ * Returns { start, end } in ORIGINAL pageText character coordinates, or null
+ * if no good match exists.
+ */
+function locateChunkInPage(pageText, chunkText) {
+  if (!pageText || !chunkText) return null;
+
+  const packed = (s) => s.toLowerCase().replace(/\s+/g, "");
+  const pageP = packed(pageText);
+  const chunkP = packed(chunkText);
+  if (chunkP.length < 20) return null;
+
+  // Position map: index in pageP → index in pageText
+  const map = new Array(pageP.length);
+  let pi = 0;
+  for (let i = 0; i < pageText.length; i++) {
+    if (!/\s/.test(pageText[i])) {
+      map[pi++] = i;
+    }
+  }
+
+  // Try the full chunk first, then back off to shorter prefixes if not found.
+  // Stops at 30 chars — anything shorter would be too fragile.
+  for (let len = chunkP.length; len >= 30; len = Math.max(30, len - 20)) {
+    const probe = chunkP.slice(0, len);
+    const idx = pageP.indexOf(probe);
+    if (idx >= 0) {
+      const start = map[idx];
+      const lastIdx = idx + len - 1;
+      const end = (map[lastIdx] ?? map[map.length - 1]) + 1;
+      return { start, end, matchedLen: len };
+    }
+    if (len === 30) break;
+  }
+  return null;
 }
 
 export default function PdfModal({ source, onClose }) {
@@ -25,17 +57,24 @@ export default function PdfModal({ source, onClose }) {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(source.page || 1);
   const [error, setError] = useState(null);
-  const [matchCount, setMatchCount] = useState(0);
+  const [hitIndices, setHitIndices] = useState(null);
+  const [matchInfo, setMatchInfo] = useState(null); // { count, matchedLen, chunkLen }
   const pageContainerRef = useRef(null);
 
-  // Use the full chunk text if backend sent it, otherwise fall back to snippet.
   const chunkText = source.chunk_text || source.snippet || "";
 
   useEffect(() => {
     setPageNumber(source.page || 1);
     setError(null);
-    setMatchCount(0);
+    setHitIndices(null);
+    setMatchInfo(null);
   }, [source]);
+
+  // Reset when navigating pages so the new page recomputes its own hits.
+  useEffect(() => {
+    setHitIndices(null);
+    setMatchInfo(null);
+  }, [pageNumber]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -48,50 +87,64 @@ export default function PdfModal({ source, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [numPages, onClose]);
 
-  // Build the highlight predicate from the full chunk text once.
-  // Strategy: take the normalized chunk as a string. For each pdf.js text item,
-  // ask if a meaningful slice of it (>= 8 normalized chars) is a substring of
-  // the normalized chunk. This catches multi-word segments without false-firing
-  // on common single words.
-  const isHit = useMemo(() => {
-    const normChunk = norm(chunkText);
-    if (normChunk.length < 12) return null;
-    return (str) => {
-      const n = norm(str);
-      if (n.length < 6) return false;        // too short to be meaningful
-      if (n.length <= 20) {
-        // whole item must appear in chunk
-        return normChunk.includes(n);
-      }
-      // for long items, accept if a substantial prefix appears
-      return normChunk.includes(n.slice(0, Math.min(40, n.length)));
-    };
-  }, [chunkText]);
+  // Called by react-pdf when the page's text content is loaded.
+  // We compute the chunk's location in the page text, then derive the set of
+  // text-item indices that fall inside that location.
+  function onGetTextSuccess(textContent) {
+    const items = textContent?.items || [];
+    if (items.length === 0) {
+      setHitIndices(new Set());
+      setMatchInfo(null);
+      return;
+    }
 
-  // Track count of matches as we render, and after the page renders, scroll
-  // the first match into view.
-  const matchCountThisRender = useRef(0);
+    // Concatenate item strings with single-space separators (matches the visual
+    // reading order). Track each item's [start, end) byte range in pageText.
+    let pageText = "";
+    const ranges = new Array(items.length);
+    for (let i = 0; i < items.length; i++) {
+      const s = items[i].str || "";
+      const start = pageText.length;
+      pageText += s;
+      ranges[i] = [start, pageText.length];
+      pageText += " ";
+    }
+
+    const loc = locateChunkInPage(pageText, chunkText);
+    if (!loc) {
+      setHitIndices(new Set());
+      setMatchInfo({ count: 0, matchedLen: 0, chunkLen: chunkText.length });
+      return;
+    }
+
+    // Any item whose range overlaps [loc.start, loc.end) is part of the chunk.
+    const hits = new Set();
+    for (let i = 0; i < ranges.length; i++) {
+      const [s, e] = ranges[i];
+      if (s < loc.end && e > loc.start) hits.add(i);
+    }
+    setHitIndices(hits);
+    setMatchInfo({ count: hits.size, matchedLen: loc.matchedLen, chunkLen: chunkText.length });
+  }
+
   const customTextRenderer = useMemo(() => {
-    if (!isHit) return undefined;
-    matchCountThisRender.current = 0;
-    return ({ str }) => {
-      if (isHit(str)) {
-        matchCountThisRender.current += 1;
-        const idx = matchCountThisRender.current;
-        return `<mark class="pdf-cite-hit" data-cite-hit="${idx}">${escapeHtml(str)}</mark>`;
+    if (!hitIndices) return undefined;
+    return ({ str, itemIndex }) => {
+      if (hitIndices.has(itemIndex)) {
+        // Mark the first hit specially so the auto-scroll target is distinct.
+        const isFirst = itemIndex === Math.min(...hitIndices);
+        const attr = isFirst ? ' data-cite-hit="1"' : "";
+        return `<mark class="pdf-cite-hit"${attr}>${escapeHtml(str)}</mark>`;
       }
       return escapeHtml(str);
     };
-  }, [isHit]);
+  }, [hitIndices]);
 
-  // After the page renders, scroll to the first highlighted item.
+  // After the page renders, scroll the first highlighted item into view.
   function onPageRenderSuccess() {
-    setMatchCount(matchCountThisRender.current);
     requestAnimationFrame(() => {
       const first = pageContainerRef.current?.querySelector('mark[data-cite-hit="1"]');
-      if (first) {
-        first.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
+      if (first) first.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }
 
@@ -110,14 +163,19 @@ export default function PdfModal({ source, onClose }) {
             <div className="text-xs text-slate-500">
               page {pageNumber}
               {numPages ? ` of ${numPages}` : ""} · cited p.{source.page}
-              {matchCount > 0 && (
+              {matchInfo?.count > 0 ? (
                 <>
                   {" · "}
                   <span className="text-amber-700 font-medium">
-                    {matchCount} highlighted match{matchCount !== 1 ? "es" : ""}
+                    chunk found ({matchInfo.matchedLen}/{matchInfo.chunkLen} chars matched)
                   </span>
                 </>
-              )}
+              ) : matchInfo?.count === 0 ? (
+                <>
+                  {" · "}
+                  <span className="text-slate-500">chunk not located on this page</span>
+                </>
+              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -176,6 +234,7 @@ export default function PdfModal({ source, onClose }) {
                 pageNumber={pageNumber}
                 width={Math.min(820, window.innerWidth * 0.85)}
                 customTextRenderer={customTextRenderer}
+                onGetTextSuccess={onGetTextSuccess}
                 onRenderSuccess={onPageRenderSuccess}
                 renderAnnotationLayer={false}
                 className="shadow-md"
