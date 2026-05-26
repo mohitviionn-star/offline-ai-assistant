@@ -62,10 +62,31 @@ export default function App() {
     try {
       await streamQuery(question, {
         model: selectedModel,
-        onMeta: (meta) => update({ route: meta.route, rationale: meta.rationale, citations: meta.citations, evidence: meta.evidence, model_used: selectedModel }),
+        onPlan: (plan) => update({
+          route: plan.route,
+          rationale: plan.rationale,
+          plannedSql: plan.sql_query,
+          plannedDocsQuery: plan.docs_query,
+          phase: "retrieving",  // route is known; SQL + docs still running
+        }),
+        onMeta: (meta) => update({
+          route: meta.route,
+          rationale: meta.rationale,
+          citations: meta.citations,
+          evidence: meta.evidence,
+          model_used: selectedModel,
+          phase: "answering",
+        }),
         onToken: (tok) => appendToken(tok),
-        onDone: (done) => update({ confidence: done.confidence, latency_ms: done.latency_ms, fast_path: done.fast_path, gated: done.gated, streaming: false }),
-        onError: (e) => update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false }),
+        onDone: (done) => update({
+          confidence: done.confidence,
+          latency_ms: done.latency_ms,
+          fast_path: done.fast_path,
+          gated: done.gated,
+          streaming: false,
+          phase: "done",
+        }),
+        onError: (e) => update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false, phase: "error" }),
       });
     } catch (e) {
       update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false });

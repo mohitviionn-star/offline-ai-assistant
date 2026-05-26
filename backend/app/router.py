@@ -238,18 +238,22 @@ def _deterministic_sql_answer(sql_result: dict, question: str) -> str:
 # Main answer pipeline
 # ----------------------------------------------------------------------
 async def answer(question: str, model: str | None = None) -> dict[str, Any]:
+    import asyncio
     p = await plan_and_sql(question, model=model)
     route = p["route"]
 
-    docs: list[dict] = []
-    sql_result: dict = {}
+    # Run SQL execution + Qdrant search in parallel — they are independent.
+    async def _do_sql():
+        if route in ("sql", "hybrid") and p.get("sql_query"):
+            return await asyncio.to_thread(execute_sql, p["sql_query"], p.get("sql_rationale", ""))
+        return {}
 
-    if route in ("docs", "hybrid") and p.get("docs_query"):
-        docs = search_documents(p["docs_query"])
+    async def _do_docs():
+        if route in ("docs", "hybrid") and p.get("docs_query"):
+            return await asyncio.to_thread(search_documents, p["docs_query"])
+        return []
 
-    # Execute the SQL the planner produced (no extra LLM call).
-    if route in ("sql", "hybrid") and p.get("sql_query"):
-        sql_result = execute_sql(p["sql_query"], p.get("sql_rationale", ""))
+    sql_result, docs = await asyncio.gather(_do_sql(), _do_docs())
 
     # RETRIEVAL-QUALITY GATE — refuse before calling the answer LLM if evidence is weak.
     strong_docs = bool(docs) and any(d.get("score", 0) >= DOC_SCORE_FLOOR for d in docs)
@@ -315,23 +319,46 @@ async def answer(question: str, model: str | None = None) -> dict[str, Any]:
 
 async def answer_stream(question: str, model: str | None = None):
     """Streaming version of answer(): yields (event_type, data) tuples.
-    Event types:
-      - 'meta'  → routing + citations + evidence (sent ONCE up front, before tokens)
+    Event types in order:
+      - 'plan'  → emitted RIGHT AFTER step 1 (route + planned sql/docs query). UI
+                  can render the routing decision + SQL preview immediately.
+      - 'meta'  → emitted after SQL exec + Qdrant search complete (parallel).
+                  Contains full citations and evidence. Tokens follow.
       - 'token' → a string fragment of the answer (zero or more)
       - 'done'  → final confidence + latency_ms
     """
+    import asyncio
     import time
     t0 = time.time()
+
+    # --- Step 1: plan + sql gen (one LLM call) ---
     p = await plan_and_sql(question, model=model)
     route = p["route"]
 
-    docs: list[dict] = []
-    sql_result: dict = {}
+    # Emit `plan` event immediately so the UI can render route + SQL preview
+    # before SQL execution and Qdrant search finish.
+    yield ("plan", {
+        "route": route,
+        "rationale": p.get("rationale", ""),
+        "sql_query": p.get("sql_query", ""),
+        "sql_rationale": p.get("sql_rationale", ""),
+        "docs_query": p.get("docs_query"),
+    })
 
-    if route in ("docs", "hybrid") and p.get("docs_query"):
-        docs = search_documents(p["docs_query"])
-    if route in ("sql", "hybrid") and p.get("sql_query"):
-        sql_result = execute_sql(p["sql_query"], p.get("sql_rationale", ""))
+    # --- Step 2 + 3: SQL execution + Qdrant search IN PARALLEL ---
+    # SQL is fast (<100ms), embedding-search is slow (~1-9s). Running them
+    # concurrently saves the SQL time on hybrid queries.
+    async def _do_sql():
+        if route in ("sql", "hybrid") and p.get("sql_query"):
+            return await asyncio.to_thread(execute_sql, p["sql_query"], p.get("sql_rationale", ""))
+        return {}
+
+    async def _do_docs():
+        if route in ("docs", "hybrid") and p.get("docs_query"):
+            return await asyncio.to_thread(search_documents, p["docs_query"])
+        return []
+
+    sql_result, docs = await asyncio.gather(_do_sql(), _do_docs())
 
     strong_docs = bool(docs) and any(d.get("score", 0) >= DOC_SCORE_FLOOR for d in docs)
     strong_sql = bool(sql_result.get("sql")) and not sql_result.get("error") and sql_result.get("row_count", 0) > 0

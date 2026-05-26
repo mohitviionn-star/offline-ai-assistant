@@ -135,7 +135,9 @@ async def query_stream(body: QueryIn):
         done_payload = {}
         try:
             async for event_type, payload in run_answer_stream(body.question, model=body.model):
-                if event_type == "meta":
+                if event_type == "plan":
+                    yield f"event: plan\ndata: {json.dumps(payload, default=str)}\n\n"
+                elif event_type == "meta":
                     meta_payload = payload
                     yield f"event: meta\ndata: {json.dumps(payload, default=str)}\n\n"
                 elif event_type == "token":

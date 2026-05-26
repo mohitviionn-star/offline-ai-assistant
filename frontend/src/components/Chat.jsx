@@ -103,10 +103,38 @@ function Message({ msg, onCiteClick }) {
   const docCites = (msg.citations || []).filter((c) => c.type === "document");
   const sqlCites = (msg.citations || []).filter((c) => c.type === "sql");
 
+  // Progressive UI: while still streaming, show a "thinking" header with what
+  // we already know (route + planned SQL/docs) before the answer text arrives.
+  const isStreaming = !!msg.streaming;
+  const phase = msg.phase;
+  const showProgressHeader = isStreaming && msg.route && !(msg.answer && msg.answer.length > 0);
+
   return (
     <div className="flex justify-start">
       <div className="max-w-3xl w-full">
         <div className="px-4 py-3 rounded-2xl bg-white border border-slate-200 shadow-sm">
+          {showProgressHeader && (
+            <div className="mb-3 pb-3 border-b border-slate-100 space-y-2">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium">
+                  ⟳ {phase === "retrieving" ? "Retrieving evidence" : phase === "answering" ? "Composing answer" : "Thinking"}
+                </span>
+                <span className="text-slate-500">route:</span>
+                <span className="font-mono text-slate-700">{msg.route}</span>
+              </div>
+              {msg.plannedSql && (
+                <div className="text-[11px] font-mono bg-slate-50 border border-slate-200 rounded px-2 py-1 overflow-x-auto">
+                  <span className="text-emerald-700 font-semibold">SQL: </span>
+                  <span className="text-slate-700">{msg.plannedSql}</span>
+                </div>
+              )}
+              {msg.plannedDocsQuery && (
+                <div className="text-[11px] text-slate-500">
+                  <span className="font-semibold text-slate-600">docs query:</span> {msg.plannedDocsQuery}
+                </div>
+              )}
+            </div>
+          )}
           <RenderAnswer
             text={msg.answer || ""}
             citations={msg.citations || []}
