@@ -42,9 +42,8 @@ export default function Chat({ messages, pending, onAsk, onCiteClick }) {
         {messages.map((m, i) => (
           <Message key={i} msg={m} onCiteClick={onCiteClick} />
         ))}
-        {pending && !(messages.length && messages[messages.length - 1]?.role === "assistant" && (messages[messages.length - 1]?.answer || "").length > 0) && (
-          <PendingBubble />
-        )}
+        {/* PendingBubble removed — ProgressTimeline inside the streaming
+            assistant bubble now provides the live feedback. */}
         <div ref={endRef} />
       </div>
 
@@ -432,15 +431,3 @@ function StepIcon({ done }) {
   );
 }
 
-function PendingBubble() {
-  return (
-    <div className="flex justify-start">
-      <div className="surface rounded-md px-4 py-3">
-        <div className="flex items-center gap-2 text-[13px] text-slate-600">
-          <span className="inline-block w-2 h-2 rounded-full bg-violet-600 animate-soft-pulse" />
-          Routing, retrieving, answering…
-        </div>
-      </div>
-    </div>
-  );
-}
