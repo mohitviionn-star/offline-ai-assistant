@@ -138,28 +138,21 @@ function Message({ msg, onCiteClick }) {
       <div className="max-w-3xl w-full">
         <div className="surface rounded-md p-4">
           {showProgressHeader && (
-            <div className="mb-3 pb-3 border-b border-slate-100 space-y-2">
+            <div className="mb-3 pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2 text-[11px]">
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-violet-200 bg-violet-50 text-violet-800 font-semibold">
+                <span className="inline-flex items-center gap-1.5 text-slate-600">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-violet-600 animate-soft-pulse" />
-                  {phase === "retrieving" ? "RETRIEVING EVIDENCE" : phase === "answering" ? "COMPOSING ANSWER" : "THINKING"}
-                </span>
-                <span className="text-slate-500">route</span>
-                <span className={`inline-flex items-center px-1.5 py-0.5 rounded border font-mono text-[10.5px] route-${msg.route}`}>
-                  {msg.route}
+                  <span className="text-slate-700 font-medium">
+                    {phase === "retrieving"
+                      ? (msg.plannedSql || msg.plannedDocsQuery
+                          ? "Looking up records and policies…"
+                          : "Searching documents…")
+                      : phase === "answering"
+                      ? "Composing answer…"
+                      : "Thinking…"}
+                  </span>
                 </span>
               </div>
-              {msg.plannedSql && (
-                <div className="sql-preview">
-                  <span className="text-emerald-700 font-semibold">SQL </span>
-                  <span className="text-slate-800">{msg.plannedSql}</span>
-                </div>
-              )}
-              {msg.plannedDocsQuery && (
-                <div className="text-[11px] text-slate-500">
-                  <span className="font-semibold text-slate-700">Docs query</span> · {msg.plannedDocsQuery}
-                </div>
-              )}
             </div>
           )}
           {(() => {

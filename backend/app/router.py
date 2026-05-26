@@ -198,9 +198,78 @@ def _format_sql_context(sql_result: dict) -> str:
 # ----------------------------------------------------------------------
 # Deterministic SQL-only answer composer (skips the answer LLM call)
 # ----------------------------------------------------------------------
+def _humanize_col(col: str) -> str:
+    """`first_name` -> `First name`. Keep acronyms uppercase."""
+    pretty = col.replace("_", " ").strip()
+    if pretty.isupper() or len(pretty) <= 3:
+        return pretty
+    return pretty[:1].upper() + pretty[1:]
+
+
+# Column-name hints that mean the value should be formatted as currency
+_MONEY_HINTS = ("amount", "rent", "price", "value", "deposit", "salary",
+                "cost", "balance", "total_dollar", "revenue", "expense", "fee")
+
+
+def _is_money_col(col: str | None) -> bool:
+    if not col:
+        return False
+    cl = col.lower()
+    return any(h in cl for h in _MONEY_HINTS)
+
+
+def _fmt_value(v, col: str | None = None):
+    """Render a SQL cell value in a conversational way.
+    Detects ISO dates, money columns, big ints, None."""
+    if v is None:
+        return "—"
+    # ISO date YYYY-MM-DD
+    if isinstance(v, str) and len(v) >= 10 and v[4:5] == "-" and v[7:8] == "-":
+        try:
+            from datetime import date
+            d = date.fromisoformat(v[:10])
+            return d.strftime("%b %-d, %Y")
+        except Exception:
+            return v
+    if isinstance(v, (int, float)):
+        if _is_money_col(col):
+            return f"${v:,.2f}" if isinstance(v, float) else f"${v:,}"
+        if isinstance(v, float):
+            if v == int(v):
+                return f"{int(v):,}"
+            return f"{v:,.2f}"
+        if abs(v) >= 1000:
+            return f"{v:,}"
+        return str(v)
+    return str(v)
+
+
+def _scalar_sentence(col: str, val) -> str:
+    """Turn a single col/val into a complete sentence."""
+    val_str = _fmt_value(val, col=col)
+    c = col.lower()
+    # Counts
+    if c.endswith("_count") or c == "count":
+        entity = c[:-6] if c.endswith("_count") else "result"
+        entity = entity.replace("_", " ").strip()
+        is_one = val_str == "1"
+        plural = "" if entity.endswith("s") or is_one else "s"
+        verb = "is" if is_one else "are"
+        return f"There {verb} {val_str} {entity}{plural}."
+    if c.startswith(("total_", "sum_")):
+        return f"Total: {val_str}."
+    if c.startswith(("avg_", "average_", "mean_")):
+        return f"Average: {val_str}."
+    if c.startswith(("max_", "maximum_")):
+        return f"Highest: {val_str}."
+    if c.startswith(("min_", "minimum_")):
+        return f"Lowest: {val_str}."
+    return f"{_humanize_col(col)}: {val_str}."
+
+
 def _deterministic_sql_answer(sql_result: dict, question: str) -> str:
     """Format an SQL-only answer without calling the answer LLM.
-    Used when route='sql' and SQL evidence is strong — saves ~60-100s on CPU hosts."""
+    Saves the slowest LLM call on CPU hosts, while keeping output conversational."""
     sql = sql_result.get("sql", "")
     cite = f"[sql:{sql[:80]}]"
     rows = sql_result.get("rows", []) or []
@@ -209,29 +278,70 @@ def _deterministic_sql_answer(sql_result: dict, question: str) -> str:
     if row_count == 0:
         return f"No matching records found. {cite}"
 
-    # Scalar: single row, single column → use the value directly.
+    # ---- Scalar (1 row, 1 col): "There are 10 residents." ----
     if len(rows) == 1 and isinstance(rows[0], dict) and len(rows[0]) == 1:
         col, val = next(iter(rows[0].items()))
-        # Phrase the answer based on the column name where possible.
-        col_human = col.replace("_", " ")
-        return f"{val} ({col_human}). {cite}"
+        return f"{_scalar_sentence(col, val)} {cite}"
 
-    # Single row, multiple columns → render as key: value, key: value, ...
+    # ---- Multi-row single column (a list of values): "Penicillin, Sulfa drugs, and Codeine." ----
+    if rows and all(isinstance(r, dict) and len(r) == 1 for r in rows):
+        col = next(iter(rows[0].keys()))
+        vals = [_fmt_value(r[col], col=col) for r in rows if r[col] is not None]
+        if len(vals) == 1:
+            return f"{vals[0]}. {cite}"
+        if len(vals) == 2:
+            return f"{vals[0]} and {vals[1]}. {cite}"
+        return f"{', '.join(vals[:-1])}, and {vals[-1]}. {cite}"
+
+    # ---- Single row, multiple columns: "Robert Miller — status: pending, room: 115." ----
     if len(rows) == 1:
-        kv = ", ".join(f"{k}: {v}" for k, v in rows[0].items() if v is not None)
+        r = rows[0]
+        # Prefer a name-like field as the leading label.
+        label_keys = ("full_name", "first_name", "name", "drug_name", "filename")
+        leader = None
+        for lk in label_keys:
+            if lk in r and r[lk]:
+                leader = (lk, str(r[lk]))
+                break
+        if leader:
+            lk, lv = leader
+            extras = [f"{_humanize_col(k).lower()}: {_fmt_value(v, col=k)}" for k, v in r.items()
+                      if k != lk and v is not None]
+            tail = f" — {', '.join(extras)}" if extras else ""
+            return f"{lv}{tail}. {cite}"
+        # No obvious name field: just key: value chain.
+        kv = ", ".join(f"{_humanize_col(k).lower()}: {_fmt_value(v, col=k)}" for k, v in r.items() if v is not None)
         return f"{kv}. {cite}"
 
-    # Multiple rows → show row count + enumerate
-    preview = rows[:10]
-    lines = [f"{row_count} matching record(s):"]
-    for r in preview:
-        # Take first 2-3 informative fields per row
-        fields = [f"{k}={v}" for k, v in r.items() if v is not None and not isinstance(v, (dict, list))][:4]
-        lines.append("  - " + ", ".join(fields))
-    if row_count > len(preview):
-        lines.append(f"  ... ({row_count - len(preview)} more)")
-    lines.append(cite)
-    return "\n".join(lines)
+    # ---- Multi-row, multi-column: short narrative list ----
+    label_keys = ("full_name", "first_name", "name", "drug_name", "filename")
+    plural = "s" if row_count != 1 else ""
+    lines = [f"Found {row_count} record{plural}:"]
+    for r in rows[:10]:
+        # Pick a name to lead with
+        leader_key = next((k for k in label_keys if k in r and r[k]), None)
+        # First name + last name combined if both present
+        if leader_key == "first_name" and "last_name" in r and r["last_name"]:
+            label = f"{r['first_name']} {r['last_name']}"
+            skip = {"first_name", "last_name"}
+        elif leader_key:
+            label = str(r[leader_key])
+            skip = {leader_key}
+        else:
+            # Use the first non-null field as the lead label
+            first_nn = next((k for k, v in r.items() if v is not None), None)
+            label = _fmt_value(r[first_nn], col=first_nn) if first_nn else ""
+            skip = {first_nn} if first_nn else set()
+
+        extras = [f"{_humanize_col(k).lower()} {_fmt_value(v, col=k)}"
+                  for k, v in r.items() if k not in skip and v is not None]
+        if extras:
+            lines.append(f"• {label} — {', '.join(extras)}")
+        else:
+            lines.append(f"• {label}")
+    if row_count > 10:
+        lines.append(f"…and {row_count - 10} more.")
+    return "\n".join(lines) + f" {cite}"
 
 
 # ----------------------------------------------------------------------
