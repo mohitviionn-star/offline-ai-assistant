@@ -112,7 +112,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-full flex">
+    <div className="app-shell">
       <Sidebar
         health={health}
         schema={schema}
@@ -122,25 +122,30 @@ export default function App() {
       />
       <input ref={fileRef} type="file" accept="application/pdf" className="hidden" onChange={onFile} />
       <main className="flex-1 flex min-w-0">
-        <div className="flex-1 flex flex-col min-w-0 border-r border-slate-200">
-          <header className="h-14 flex items-center justify-between px-6 border-b border-slate-200 bg-white">
-            <h1 className="text-base font-semibold tracking-tight">
-              Offline AI Assistant
-              <span className="ml-2 text-xs font-normal text-slate-500">
-                hybrid retrieval · grounded citations · local LLM
-              </span>
-            </h1>
+        <div className="flex-1 flex flex-col min-w-0">
+          <header className="h-14 flex items-center justify-between pl-6 pr-4 border-b border-slate-200 bg-white">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-7 h-7 rounded-md bg-brand-900 text-white flex items-center justify-center text-xs font-bold tracking-tight shrink-0">AI</div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-ink tracking-tight leading-tight">
+                  Grounded Assistant
+                </div>
+                <div className="text-[11px] text-slate-500 leading-tight">
+                  Hybrid retrieval · grounded citations · on-prem LLM
+                </div>
+              </div>
+            </div>
             {models.length > 0 && (
               <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500">Model:</label>
+                <span className="eyebrow">Model</span>
                 <select
                   value={selectedModel || ""}
                   onChange={(e) => setSelectedModel(e.target.value || null)}
                   disabled={pending}
-                  className="text-xs px-2 py-1 rounded-md border border-slate-300 bg-white
-                             focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent
-                             disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Choose the local LLM for this query"
+                  className="text-xs px-2.5 py-1.5 rounded-md border border-slate-300 bg-white text-slate-800
+                             focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent
+                             disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                  title="Local LLM used for this query"
                 >
                   {models.map((m) => (
                     <option key={m.name} value={m.name}>

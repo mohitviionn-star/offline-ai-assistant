@@ -5,22 +5,63 @@
 html, body, #root { height: 100%; }
 
 body {
-  @apply bg-slate-50 text-ink antialiased;
+  @apply bg-slate-100 text-ink antialiased;
   font-family: "Inter", ui-sans-serif, system-ui;
+  font-feature-settings: "cv11", "ss01", "ss03";  /* Inter tabular nums + stylistic alts */
 }
 
+/* ---------- Layout chrome ---------- */
+.app-shell { @apply h-full flex bg-slate-100; }
+.surface   { @apply bg-white border border-slate-200 shadow-card; }
+
+/* ---------- Section headers in the sidebar / panels ---------- */
+.eyebrow {
+  @apply text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500;
+}
+
+/* ---------- Citation chips ---------- */
 .cite-chip {
-  @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium
-         bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200
-         cursor-pointer transition-colors;
+  @apply inline-flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium
+         bg-slate-100 text-slate-700 border border-slate-200
+         hover:bg-slate-200 hover:border-slate-300
+         cursor-pointer transition-colors leading-none;
+}
+.cite-chip.doc {
+  @apply bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300;
+}
+.cite-chip.sql {
+  @apply bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300
+         font-mono text-[10.5px];
 }
 
-.cite-chip.doc { @apply bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100; }
-.cite-chip.sql { @apply bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100; }
+/* Confidence badge variants */
+.conf-high   { @apply bg-emerald-50 text-emerald-800 border-emerald-200; }
+.conf-medium { @apply bg-amber-50  text-amber-800  border-amber-200;  }
+.conf-low    { @apply bg-slate-100 text-slate-600  border-slate-200;  }
+.conf-refused{ @apply bg-rose-50   text-rose-800   border-rose-200;   }
+
+/* Route badges */
+.route-docs   { @apply bg-indigo-50 text-indigo-800 border-indigo-200; }
+.route-sql    { @apply bg-emerald-50 text-emerald-800 border-emerald-200; }
+.route-hybrid { @apply bg-violet-50 text-violet-800 border-violet-200; }
+.route-refused{ @apply bg-rose-50 text-rose-800 border-rose-200; }
+
+/* SQL preview block */
+.sql-preview {
+  @apply font-mono text-[11px] leading-snug bg-slate-50 border border-slate-200
+         rounded-md px-2.5 py-1.5 overflow-x-auto text-slate-800;
+}
+
+/* Subtle pulse used in the progressive "thinking" indicator */
+@keyframes soft-pulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+.animate-soft-pulse { animation: soft-pulse 1.6s ease-in-out infinite; }
 
 /* PDF citation highlight inside the pdf.js text layer */
 .react-pdf__Page__textContent mark.pdf-cite-hit {
-  background-color: rgba(250, 204, 21, 0.55); /* amber-400 / 55% */
+  background-color: rgba(250, 204, 21, 0.55);
   color: transparent;
   padding: 0;
   border-radius: 2px;
