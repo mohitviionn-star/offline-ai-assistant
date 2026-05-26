@@ -35,15 +35,13 @@ export default function Chat({ messages, pending, onAsk, onCiteClick }) {
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-slate-50">
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+    <div className="flex-1 flex flex-col min-h-0 bg-white">
+      <div className="flex-1 overflow-y-auto px-8 py-8 space-y-6">
         {messages.length === 0 && <EmptyState onAsk={onAsk} />}
 
         {messages.map((m, i) => (
           <Message key={i} msg={m} onCiteClick={onCiteClick} />
         ))}
-        {/* PendingBubble removed — ProgressTimeline inside the streaming
-            assistant bubble now provides the live feedback. */}
         <div ref={endRef} />
       </div>
 
@@ -116,9 +114,13 @@ function EmptyState({ onAsk }) {
 
 function Message({ msg, onCiteClick }) {
   if (msg.role === "user") {
+    // User turn: a quiet header, not a bubble.
     return (
-      <div className="flex justify-end">
-        <div className="max-w-2xl px-4 py-2.5 rounded-md bg-ink text-white text-sm leading-relaxed">
+      <div className="max-w-3xl mx-auto pt-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-1">
+          You asked
+        </div>
+        <div className="text-[15px] text-ink leading-snug font-medium">
           {msg.text}
         </div>
       </div>
@@ -130,50 +132,47 @@ function Message({ msg, onCiteClick }) {
 
   const isStreaming = !!msg.streaming;
   const phase = msg.phase;
-  // Show progress timeline while streaming AND answer text hasn't started yet.
-  // Also show it during the silent pre-plan wait (no route, no steps yet).
   const showProgressHeader = isStreaming && !(msg.answer && msg.answer.length > 0);
 
+  const cited = extractCitedInOrder(msg.answer || "", msg.citations || []);
+
   return (
-    <div className="flex justify-start">
-      <div className="max-w-3xl w-full">
-        <div className="surface rounded-md p-4">
-          {showProgressHeader && (
-            <ProgressTimeline phase={phase} steps={msg.steps || []} route={msg.route} />
+    <div className="max-w-3xl mx-auto">
+      {/* The answer itself: flat, no bubble, just typography. */}
+      {showProgressHeader ? (
+        <ProgressTimeline phase={phase} steps={msg.steps || []} route={msg.route} />
+      ) : (
+        <RenderAnswer
+          text={msg.answer || ""}
+          cited={cited}
+          onCiteClick={onCiteClick}
+        />
+      )}
+
+      {/* Sources + meta only after the answer is composed. */}
+      {!showProgressHeader && cited.length > 0 && (
+        <SourcesList cited={cited} onCiteClick={onCiteClick} />
+      )}
+      {!showProgressHeader && (msg.answer || msg.confidence) && (
+        <div className="mt-4 flex items-center gap-2 flex-wrap">
+          <Badge route={msg.route} confidence={msg.confidence} latency={msg.latency_ms} fastPath={msg.fast_path} />
+          {(docCites.length + sqlCites.length) > cited.length && (
+            <span className="text-[10.5px] text-slate-400">
+              {cited.length} of {docCites.length + sqlCites.length} sources used in answer
+            </span>
           )}
-          {(() => {
-            const cited = extractCitedInOrder(msg.answer || "", msg.citations || []);
-            return (
-              <>
-                <RenderAnswer
-                  text={msg.answer || ""}
-                  cited={cited}
-                  onCiteClick={onCiteClick}
-                />
-                {cited.length > 0 && (
-                  <SourcesList cited={cited} onCiteClick={onCiteClick} />
-                )}
-                {(msg.answer || msg.confidence) && (
-                  <div className="mt-3 flex items-center gap-2 pt-3 border-t border-slate-100">
-                    <Badge route={msg.route} confidence={msg.confidence} latency={msg.latency_ms} fastPath={msg.fast_path} />
-                    {/* Extra-evidence toggle: cited count vs total retrieved */}
-                    {(docCites.length + sqlCites.length) > cited.length && (
-                      <span className="text-[10.5px] text-slate-400">
-                        {cited.length} of {docCites.length + sqlCites.length} sources used in answer
-                      </span>
-                    )}
-                  </div>
-                )}
-                {msg.rationale && !showProgressHeader && (
-                  <div className="mt-2 text-[10.5px] text-slate-400">
-                    <span className="text-slate-500">router</span> · {msg.rationale}
-                  </div>
-                )}
-              </>
-            );
-          })()}
+          {msg.rationale && (
+            <span className="text-[10.5px] text-slate-400">
+              <span className="text-slate-500">·</span> router: {msg.rationale}
+            </span>
+          )}
         </div>
-      </div>
+      )}
+
+      {/* Subtle divider between turns once the response is settled. */}
+      {!isStreaming && (
+        <div className="mt-6 border-t border-slate-200" />
+      )}
     </div>
   );
 }
