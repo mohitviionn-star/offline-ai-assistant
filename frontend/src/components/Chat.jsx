@@ -1,14 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
 
 const SAMPLE_PROMPTS = [
-  { vertical: "Nursing Home", icon: "◐", prompt: "Does Robert Miller have physical therapy approval, and what does our protocol say about PT eligibility?" },
-  { vertical: "Nursing Home", icon: "◐", prompt: "Which residents are currently on insulin AND have a fall-risk history, and what is our insulin administration protocol?" },
-  { vertical: "Nursing Home", icon: "◐", prompt: "What medications is Robert Miller allergic to?" },
-  { vertical: "Legal · Divorce", icon: "◑", prompt: "Does Sarah Klein's custody agreement allow overnight travel outside Illinois, and what does our custody SOP say about travel restrictions?" },
+  // Nursing Home / Healthcare — clinical records + SOPs
+  { vertical: "Healthcare · Nursing Home", icon: "◐", prompt: "Does Robert Miller have physical therapy approval, and what does our protocol say about PT eligibility?" },
+  { vertical: "Healthcare · Nursing Home", icon: "◐", prompt: "Which residents are currently on insulin AND have a fall-risk history, and what is our insulin administration protocol?" },
+  { vertical: "Healthcare · Nursing Home", icon: "◐", prompt: "What medications is Robert Miller allergic to?" },
+  // Property Management — lease/rent records + tenant handbook
+  { vertical: "Property Management", icon: "◓", prompt: "How much rent has Devon Patel paid in the last 6 months, and what does our tenant handbook say about late fees?" },
+  { vertical: "Property Management", icon: "◓", prompt: "Which leases are expiring in the next 6 months, and what does the handbook say about renewal notices?" },
+  { vertical: "Property Management", icon: "◓", prompt: "Are pets allowed at 120 Maple Ave, and what is our pet deposit policy?" },
+  // Legal — kept from prior scope; covers divorce + personal injury
   { vertical: "Legal · Divorce", icon: "◑", prompt: "Show all missed alimony payments for Michael Rosenberg and retrieve the enforcement procedure from our settlement SOP." },
   { vertical: "Legal · Personal Injury", icon: "◑", prompt: "Did Robert Diaz miss any treatment appointments, and what does our case strategy memo say about treatment gaps?" },
-  { vertical: "Legal · Personal Injury", icon: "◑", prompt: "Which clients have upcoming statute-of-limitations deadlines, and what does our PI strategy say about SOL?" },
-  { vertical: "Real Estate", icon: "◓", prompt: "Which property has the highest current value, and what does the landlord-tenant handbook say about security deposits?" },
 ];
 
 function groupedPrompts() {

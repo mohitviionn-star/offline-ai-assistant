@@ -68,6 +68,15 @@ Q: "Show all missed alimony payments for Michael Rosenberg."
 Q: "Did Robert Diaz miss any treatment appointments, and what does our case strategy memo say about treatment gaps?"
 {"route":"hybrid","docs_query":"treatment gaps case strategy","sql_query":"SELECT t.treatment_date, t.provider, t.status FROM treatments t JOIN clients cl ON cl.id = t.client_id WHERE cl.first_name = 'Robert' AND cl.last_name = 'Diaz' AND t.status = 'missed' LIMIT 50","sql_rationale":"Robert Diaz missed treatments","rationale":"records + policy memo"}
 
+Q: "How much rent has Devon Patel paid in the last 6 months, and what does the handbook say about late fees?"
+{"route":"hybrid","docs_query":"late fee policy rent payment","sql_query":"SELECT p.due_date, p.amount, p.status, p.paid_on FROM payments p JOIN leases l ON l.id = p.lease_id JOIN tenants t ON t.id = l.tenant_id WHERE t.first_name = 'Devon' AND t.last_name = 'Patel' ORDER BY p.due_date DESC LIMIT 6","sql_rationale":"Devon Patel's recent rent payments","rationale":"records (rent history) + tenant handbook policy"}
+
+Q: "Which leases are expiring in the next 6 months, and what does the handbook say about renewal notices?"
+{"route":"hybrid","docs_query":"renewal notice lease expiration","sql_query":"SELECT t.first_name, t.last_name, l.end_date, l.monthly_rent FROM leases l JOIN tenants t ON t.id = l.tenant_id WHERE date(l.end_date) <= date('now','+6 months') AND date(l.end_date) >= date('now') ORDER BY l.end_date","sql_rationale":"Leases expiring within 6 months","rationale":"database listing + handbook policy"}
+
+Q: "Are pets allowed at 120 Maple Ave?"
+{"route":"hybrid","docs_query":"pet policy deposit","sql_query":"SELECT pr.address, l.pets_allowed, l.notes FROM leases l JOIN properties pr ON pr.id = l.property_id WHERE pr.address = '120 Maple Ave'","sql_rationale":"Pet allowance for that property","rationale":"property-specific rule + general policy"}
+
 The user's question + database schema follow.
 """
 
