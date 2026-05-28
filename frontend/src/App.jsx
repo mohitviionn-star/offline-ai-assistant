@@ -17,6 +17,11 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState(null);  // null = backend default
   const fileRef = useRef(null);
+  const abortRef = useRef(null);
+
+  function onStop() {
+    abortRef.current?.abort();
+  }
 
   function handleCiteClick(c) {
     // Both docs and SQL open in the right-side evidence panel.
@@ -65,14 +70,18 @@ export default function App() {
       );
 
     const t0 = Date.now();
+    abortRef.current = new AbortController();
     try {
       await streamQuery(question, {
         model: selectedModel,
+        signal: abortRef.current.signal,
         onPlan: (plan) => update({
           route: plan.route,
           rationale: plan.rationale,
           plannedSql: plan.sql_query,
           plannedDocsQuery: plan.docs_query,
+          clarification: plan.clarification || "",
+          clarification_options: plan.clarification_options || [],
           phase: "retrieving",
           steps: [{ kind: "plan", status: "done", t: Date.now() - t0 }],
         }),
@@ -99,14 +108,26 @@ export default function App() {
           latency_ms: done.latency_ms,
           fast_path: done.fast_path,
           gated: done.gated,
+          clarification_required: done.clarification_required,
+          followups_pending: !!done.followups_pending,
           streaming: false,
           phase: "done",
         }),
+        onFollowups: (data) => update({ followups: data.questions || [], followups_pending: false }),
         onError: (e) => update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false, phase: "error" }),
       });
     } catch (e) {
       update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false });
     } finally {
+      // If the message is still marked as streaming, this was an abort — finalize it.
+      setMessages((m) =>
+        m.map((msg, i) =>
+          i === assistantIdx && msg.streaming
+            ? { ...msg, streaming: false, stopped: true, followups_pending: false, phase: "stopped" }
+            : msg
+        )
+      );
+      abortRef.current = null;
       setPending(false);
     }
   }
@@ -139,44 +160,28 @@ export default function App() {
       <input ref={fileRef} type="file" accept="application/pdf" className="hidden" onChange={onFile} />
       <main className="flex-1 flex min-w-0">
         <div className="flex-1 flex flex-col min-w-0">
-          <header className="h-14 flex items-center justify-between pl-6 pr-4 border-b border-slate-200 bg-white">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-7 h-7 rounded-md bg-brand-900 text-white flex items-center justify-center text-xs font-bold tracking-tight shrink-0">AI</div>
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-ink tracking-tight leading-tight">
-                  Grounded Assistant
-                </div>
-                <div className="text-[11px] text-slate-500 leading-tight">
-                  Hybrid retrieval · grounded citations · on-prem LLM
-                </div>
+          <header className="h-12 flex items-center justify-between pl-6 pr-4 border-b border-slate-200 bg-white">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="avatar-ai w-6 h-6 rounded-lg !text-[9px]">AI</div>
+              <div className="text-[13px] font-semibold text-ink tracking-tight leading-tight">
+                Grounded Assistant
               </div>
             </div>
-            {models.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="eyebrow">Model</span>
-                <select
-                  value={selectedModel || ""}
-                  onChange={(e) => setSelectedModel(e.target.value || null)}
-                  disabled={pending}
-                  className="text-xs px-2.5 py-1.5 rounded-md border border-slate-300 bg-white text-slate-800
-                             focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent
-                             disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-                  title="Local LLM used for this query"
-                >
-                  {models.map((m) => (
-                    <option key={m.name} value={m.name}>
-                      {m.label || m.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div className="text-[10.5px] text-slate-400 hidden md:block">
+              Hybrid retrieval · on-prem LLM
+            </div>
           </header>
           <Chat
             messages={messages}
             pending={pending}
             onAsk={onAsk}
+            onStop={onStop}
             onCiteClick={handleCiteClick}
+            models={models}
+            selectedModel={selectedModel}
+            onSelectModel={setSelectedModel}
+            onUploadClick={() => fileRef.current?.click()}
+            uploadStatus={uploadStatus}
           />
         </div>
         <SourcePanel source={activeSource} onClose={() => setActiveSource(null)} onOpenPdf={openFullPdf} />

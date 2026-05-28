@@ -1,15 +1,14 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const SAMPLE_PROMPTS = [
-  // Nursing Home / Healthcare — clinical records + SOPs
   { vertical: "Healthcare · Nursing Home", icon: "◐", prompt: "Does Robert Miller have physical therapy approval, and what does our protocol say about PT eligibility?" },
   { vertical: "Healthcare · Nursing Home", icon: "◐", prompt: "Which residents are currently on insulin AND have a fall-risk history, and what is our insulin administration protocol?" },
   { vertical: "Healthcare · Nursing Home", icon: "◐", prompt: "What medications is Robert Miller allergic to?" },
-  // Property Management — lease/rent records + tenant handbook
   { vertical: "Property Management", icon: "◓", prompt: "How much rent has Devon Patel paid in the last 6 months, and what does our tenant handbook say about late fees?" },
   { vertical: "Property Management", icon: "◓", prompt: "Which leases are expiring in the next 6 months, and what does the handbook say about renewal notices?" },
   { vertical: "Property Management", icon: "◓", prompt: "Are pets allowed at 120 Maple Ave, and what is our pet deposit policy?" },
-  // Legal — kept from prior scope; covers divorce + personal injury
   { vertical: "Legal · Divorce", icon: "◑", prompt: "Show all missed alimony payments for Michael Rosenberg and retrieve the enforcement procedure from our settlement SOP." },
   { vertical: "Legal · Personal Injury", icon: "◑", prompt: "Did Robert Diaz miss any treatment appointments, and what does our case strategy memo say about treatment gaps?" },
 ];
@@ -22,88 +21,183 @@ function groupedPrompts() {
   return Object.entries(groups);
 }
 
-export default function Chat({ messages, pending, onAsk, onCiteClick }) {
+export default function Chat({ messages, pending, onAsk, onStop, onCiteClick, models, selectedModel, onSelectModel, onUploadClick, uploadStatus }) {
   const [input, setInput] = useState("");
   const endRef = useRef(null);
+  const textareaRef = useRef(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, pending]);
 
+  // Auto-grow the textarea up to a cap (CSS max-height handles the cap).
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = el.scrollHeight + "px";
+  }, [input]);
+
   function submit(e) {
     e?.preventDefault();
-    if (pending || !input.trim()) return;
+    // While a query is in flight, the button acts as a Stop.
+    if (pending) {
+      onStop?.();
+      return;
+    }
+    if (!input.trim()) return;
     onAsk(input);
     setInput("");
   }
 
+  function onKeyDown(e) {
+    // Enter to send (or stop while pending), Shift+Enter for newline.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      submit();
+    }
+  }
+
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-white">
-      <div className="flex-1 overflow-y-auto px-8 py-8 space-y-6">
-        {messages.length === 0 && <EmptyState onAsk={onAsk} />}
-
-        {messages.map((m, i) => (
-          <Message key={i} msg={m} onCiteClick={onCiteClick} />
-        ))}
-        <div ref={endRef} />
+      <div className="flex-1 overflow-y-auto px-6 py-8">
+        <div className="max-w-3xl mx-auto space-y-7">
+          {messages.length === 0 && <EmptyState onAsk={onAsk} />}
+          {messages.map((m, i) => (
+            <Message key={i} msg={m} onCiteClick={onCiteClick} onAsk={onAsk} />
+          ))}
+          <div ref={endRef} />
+        </div>
       </div>
 
-      <form onSubmit={submit} className="border-t border-slate-200 bg-white px-6 py-3.5">
-        <div className="flex gap-2 items-center">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={pending}
-            placeholder="Ask about residents, cases, properties, or any policy…"
-            className="flex-1 px-4 py-2.5 rounded-md border border-slate-300 bg-white text-sm text-ink
-                       placeholder:text-slate-400
-                       focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent
-                       disabled:bg-slate-50 disabled:cursor-not-allowed"
-          />
-          <button
-            type="submit"
-            disabled={pending || !input.trim()}
-            className="px-4 py-2.5 rounded-md bg-ink text-white text-sm font-semibold
-                       hover:bg-brand-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            Ask
-          </button>
-        </div>
-      </form>
+      <div className="px-6 pt-3 pb-5 bg-gradient-to-t from-white via-white to-white/0">
+        <form onSubmit={submit} className="max-w-3xl mx-auto">
+          <div className="composer-shell">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              rows={1}
+              placeholder={pending ? "Stop the current answer (□) or keep typing your next question…" : "Message the assistant — Shift+Enter for a new line"}
+              className="composer-textarea"
+            />
+            <div className="flex items-center justify-between px-2 pb-2">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={onUploadClick}
+                  disabled={pending}
+                  className="composer-btn"
+                  title="Attach a PDF (ingests into knowledge base)"
+                  aria-label="Attach PDF"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
+                {models && models.length > 0 && (
+                  <ModelPill models={models} selectedModel={selectedModel} onSelectModel={onSelectModel} disabled={pending} />
+                )}
+                {uploadStatus && (
+                  <span className="text-[10.5px] text-slate-500 ml-2 truncate max-w-[220px]" title={uploadStatus}>
+                    {uploadStatus}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10.5px] text-slate-400 hidden sm:inline">
+                  Enter ↵ to send
+                </span>
+                <button
+                  type="submit"
+                  disabled={!pending && !input.trim()}
+                  className="composer-send"
+                  title={pending ? "Stop" : "Send"}
+                  aria-label={pending ? "Stop generating" : "Send"}
+                >
+                  {pending ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                      <rect x="5" y="5" width="14" height="14" rx="2" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="19" x2="12" y2="5" />
+                      <polyline points="5 12 12 5 19 12" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+          <p className="mt-2 text-center text-[10.5px] text-slate-400">
+            Grounded answers only · every claim is cited from your docs or your database.
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ModelPill({ models, selectedModel, onSelectModel, disabled }) {
+  const cur = models.find((m) => m.name === selectedModel) || models[0];
+  const label = cur?.label || cur?.name || "model";
+  return (
+    <div className="relative">
+      <select
+        value={selectedModel || ""}
+        onChange={(e) => onSelectModel?.(e.target.value || null)}
+        disabled={disabled}
+        className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed"
+        title="Local LLM used for this query"
+        aria-label="Model selector"
+      >
+        {models.map((m) => (
+          <option key={m.name} value={m.name}>{m.label || m.name}</option>
+        ))}
+      </select>
+      <span className="composer-pill pointer-events-none">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+        <span className="font-medium truncate max-w-[140px]">{label}</span>
+      </span>
     </div>
   );
 }
 
 function EmptyState({ onAsk }) {
   return (
-    <div className="max-w-3xl mx-auto pt-6">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-2">
-        Hybrid intelligence demo
+    <div className="pt-4">
+      <div className="text-center">
+        <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white text-sm font-bold tracking-tight shadow-md mb-4">
+          AI
+        </div>
+        <h2 className="text-[22px] font-semibold text-ink tracking-tight leading-tight">
+          How can I help today?
+        </h2>
+        <p className="mt-1.5 text-[13px] text-slate-500 max-w-xl mx-auto">
+          I ground every answer in your documents and your database — and cite the exact source for each claim.
+        </p>
       </div>
-      <h2 className="text-2xl font-semibold text-ink tracking-tight leading-tight">
-        Ground every answer in your documents and your data.
-      </h2>
-      <p className="mt-2 text-sm text-slate-600 max-w-2xl">
-        This assistant routes between document retrieval and SQL on the fly, then cites the exact source for every claim.
-        Pick a sample prompt below to see all three verticals in action.
-      </p>
 
-      <div className="mt-6 space-y-5">
+      <div className="mt-7 space-y-5">
         {groupedPrompts().map(([vertical, items]) => (
           <div key={vertical}>
             <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-2">
               {vertical}
             </div>
-            <div className="grid gap-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               {items.map((p) => (
                 <button
                   key={p.prompt}
                   onClick={() => onAsk(p.prompt)}
-                  className="group text-left text-[13px] leading-snug text-slate-800
-                             px-4 py-3 rounded-md bg-white border border-slate-200
-                             hover:border-ink hover:shadow-card transition-all"
+                  className="group text-left text-[12.5px] leading-snug text-slate-800
+                             px-3.5 py-2.5 rounded-xl bg-white border border-slate-200
+                             hover:border-slate-400 hover:shadow-card transition-all"
                 >
-                  <span className="text-slate-400 mr-2">{p.icon}</span>
+                  <span className="text-slate-400 mr-1.5">{p.icon}</span>
                   {p.prompt}
                 </button>
               ))}
@@ -115,15 +209,11 @@ function EmptyState({ onAsk }) {
   );
 }
 
-function Message({ msg, onCiteClick }) {
+function Message({ msg, onCiteClick, onAsk }) {
   if (msg.role === "user") {
-    // User turn: a quiet header, not a bubble.
     return (
-      <div className="max-w-3xl mx-auto pt-2">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-1">
-          You asked
-        </div>
-        <div className="text-[15px] text-ink leading-snug font-medium">
+      <div className="flex justify-end">
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-slate-100 border border-slate-200 px-4 py-2.5 text-[14px] text-ink leading-snug whitespace-pre-wrap">
           {msg.text}
         </div>
       </div>
@@ -135,48 +225,133 @@ function Message({ msg, onCiteClick }) {
 
   const isStreaming = !!msg.streaming;
   const phase = msg.phase;
-  const showProgressHeader = isStreaming && !(msg.answer && msg.answer.length > 0);
-
+  const showClarification = !!msg.clarification;
+  const showProgressHeader = isStreaming && !(msg.answer && msg.answer.length > 0) && !showClarification;
   const cited = extractCitedInOrder(msg.answer || "", msg.citations || []);
+  const followups = Array.isArray(msg.followups) ? msg.followups : [];
 
   return (
-    <div className="max-w-3xl mx-auto">
-      {/* The answer itself: flat, no bubble, just typography. */}
-      {showProgressHeader ? (
-        <ProgressTimeline phase={phase} steps={msg.steps || []} route={msg.route} />
-      ) : (
-        <RenderAnswer
-          text={msg.answer || ""}
-          cited={cited}
-          onCiteClick={onCiteClick}
-          streaming={isStreaming}
-        />
-      )}
+    <div className="flex gap-3 items-start">
+      <div className="avatar-ai">AI</div>
+      <div className="flex-1 min-w-0 pt-0.5">
+        {showProgressHeader ? (
+          <ProgressTimeline phase={phase} steps={msg.steps || []} route={msg.route} />
+        ) : showClarification ? (
+          <ClarificationBanner
+            question={msg.clarification}
+            options={msg.clarification_options || []}
+            onAsk={onAsk}
+          />
+        ) : (
+          <RenderAnswer
+            text={msg.answer || ""}
+            cited={cited}
+            onCiteClick={onCiteClick}
+            streaming={isStreaming}
+          />
+        )}
 
-      {/* Sources + meta block — only after streaming is fully done.
-          While tokens are still arriving the answer text is the only thing visible. */}
-      {!isStreaming && cited.length > 0 && (
-        <SourcesList cited={cited} onCiteClick={onCiteClick} />
-      )}
-      {!isStreaming && (msg.answer || msg.confidence) && (
-        <div className="mt-4 flex items-center gap-2 flex-wrap">
-          <Badge route={msg.route} confidence={msg.confidence} latency={msg.latency_ms} fastPath={msg.fast_path} />
-          {(docCites.length + sqlCites.length) > cited.length && (
-            <span className="text-[10.5px] text-slate-400">
-              {cited.length} of {docCites.length + sqlCites.length} sources used in answer
-            </span>
-          )}
-          {msg.rationale && (
-            <span className="text-[10.5px] text-slate-400">
-              <span className="text-slate-500">·</span> router: {msg.rationale}
-            </span>
+        {!isStreaming && !showClarification && cited.length > 0 && (
+          <SourcesList cited={cited} onCiteClick={onCiteClick} />
+        )}
+        {!isStreaming && !showClarification && msg.latency_ms && (
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <Badge latency={msg.latency_ms} />
+          </div>
+        )}
+        {!isStreaming && !showClarification && (followups.length > 0 || msg.followups_pending) && (
+          <FollowupsRow questions={followups} pending={msg.followups_pending} onAsk={onAsk} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ClarificationBanner({ question, options, onAsk }) {
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3">
+      <div className="flex items-start gap-2">
+        <span className="text-amber-600 text-[14px] leading-none mt-[2px]" aria-hidden>?</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700 mb-1">
+            Quick clarification
+          </div>
+          <div className="text-[13.5px] text-ink leading-snug">{question}</div>
+          {options.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {options.map((opt, i) => (
+                <button
+                  key={i}
+                  onClick={() => onAsk?.(opt)}
+                  className="text-[12px] leading-tight px-2.5 py-1 rounded-full
+                             bg-white border border-amber-300 text-amber-900
+                             hover:bg-amber-100 hover:border-amber-400 transition-colors"
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
           )}
         </div>
-      )}
+      </div>
+    </div>
+  );
+}
 
-      {/* Subtle divider between turns once the response is settled. */}
-      {!isStreaming && (
-        <div className="mt-6 border-t border-slate-200" />
+function FollowupsRow({ questions, pending, onAsk }) {
+  // Stagger: label fades in first, then each chip ~250ms after the previous.
+  const labelDelay = 0;
+  const firstChipDelay = 350;
+  const chipStagger = 250;
+
+  // While waiting for the followups LLM call, show 3 skeleton chips.
+  // The label appears immediately so the user sees something is coming.
+  const showSkeleton = pending && questions.length === 0;
+
+  return (
+    <div className="mt-4 pt-3 border-t border-slate-100">
+      <div
+        className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-1.5 gentle-fade-in"
+        style={{ animationDelay: `${labelDelay}ms` }}
+      >
+        You might also ask
+      </div>
+      {showSkeleton ? (
+        <div className="flex flex-wrap gap-1.5">
+          {[0, 1, 2].map((i) => (
+            <span
+              key={i}
+              className="inline-block h-[26px] rounded-full border border-slate-200 overflow-hidden gentle-fade-in"
+              style={{
+                width: `${110 + (i * 47) % 90}px`,
+                animationDelay: `${firstChipDelay + i * chipStagger}ms`,
+              }}
+              aria-hidden
+            >
+              <span
+                className="block w-full h-full skeleton-shimmer"
+                style={{ animationDelay: `${i * 200}ms` }}
+              />
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {questions.map((q, i) => (
+            <button
+              key={i}
+              onClick={() => onAsk?.(q)}
+              className="text-left text-[12px] leading-snug px-3 py-1.5 rounded-full
+                         bg-slate-50 border border-slate-200 text-slate-700
+                         hover:bg-slate-100 hover:border-slate-300 hover:text-ink
+                         transition-colors max-w-full truncate gentle-fade-in"
+              style={{ animationDelay: `${firstChipDelay + i * chipStagger}ms` }}
+              title={q}
+            >
+              {q}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -186,12 +361,9 @@ function Message({ msg, onCiteClick }) {
  * Walk the answer text in order, find each [doc:...] / [sql:...] marker,
  * dedupe (same source = same number), and resolve to the underlying citation
  * object. Returns an ordered list: [{n, kind, label, cite}].
- *
- * If a marker has no matching citation (LLM made one up), the entry still
- * appears but with cite=null so the UI can still render the inline marker.
  */
 function extractCitedInOrder(text, citations) {
-  const seen = new Map();   // key → { n, kind, label, cite }
+  const seen = new Map();
   const order = [];
   const re = /\[(doc|sql):([^\]]+)\]/g;
   let m;
@@ -214,39 +386,50 @@ function extractCitedInOrder(text, citations) {
   return order;
 }
 
-function RenderAnswer({ text, cited, onCiteClick, streaming = false }) {
-  // Build a quick lookup: marker key → cited entry
+const CITE_SCHEME = "cite";
+
+function preprocess(text, cited) {
   const byKey = new Map(cited.map((c) => [c.key, c]));
-  const parts = [];
-  const re = /\[(doc|sql):([^\]]+)\]/g;
-  let lastIdx = 0;
-  let match;
-  let key = 0;
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > lastIdx) parts.push(<span key={key++}>{text.slice(lastIdx, match.index)}</span>);
-    const k = match[1];
-    const lbl = match[2].trim();
-    const entry = byKey.get(`${k}:${lbl}`);
-    parts.push(
-      <button
-        key={key++}
-        className={`inline-flex items-baseline align-baseline px-1 mx-0.5 rounded text-[10.5px] font-semibold leading-none transition-colors
-          ${k === "doc"
-            ? "bg-indigo-100 text-indigo-800 hover:bg-indigo-200 hover:text-indigo-900"
-            : "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 hover:text-emerald-900 font-mono"}`}
-        onClick={() => entry?.cite && onCiteClick?.(entry.cite)}
-        title={entry ? `[${entry.n}] ${entry.kind === "doc" ? "📄" : "⚙"} ${lbl}` : lbl}
-      >
-        {entry ? entry.n : "?"}
-      </button>
-    );
-    lastIdx = match.index + match[0].length;
-  }
-  if (lastIdx < text.length) parts.push(<span key={key++}>{text.slice(lastIdx)}</span>);
+  return text.replace(/\[(doc|sql):([^\]]+)\]/g, (_m, kind, label) => {
+    const trimmed = label.trim();
+    const entry = byKey.get(`${kind}:${trimmed}`);
+    const n = entry ? entry.n : "?";
+    return `[${n}](${CITE_SCHEME}-${kind}://${encodeURIComponent(trimmed)})`;
+  });
+}
+
+function RenderAnswer({ text, cited, onCiteClick, streaming = false }) {
+  const byKey = new Map(cited.map((c) => [c.key, c]));
+  const processed = preprocess(text || "", cited);
+
+  const components = {
+    a: ({ href, children }) => {
+      if (typeof href === "string" && href.startsWith(`${CITE_SCHEME}-`)) {
+        const kind = href.startsWith(`${CITE_SCHEME}-doc`) ? "doc" : "sql";
+        const label = decodeURIComponent(href.replace(`${CITE_SCHEME}-${kind}://`, ""));
+        const entry = byKey.get(`${kind}:${label}`);
+        return (
+          <button
+            onClick={() => entry?.cite && onCiteClick?.(entry.cite)}
+            className={`inline-flex items-baseline align-baseline px-1 mx-0.5 rounded text-[10.5px] font-semibold leading-none transition-colors
+              ${kind === "doc"
+                ? "bg-indigo-100 text-indigo-800 hover:bg-indigo-200 hover:text-indigo-900"
+                : "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 hover:text-emerald-900 font-mono"}`}
+            title={entry ? `[${entry.n}] ${kind === "doc" ? "📄" : "⚙"} ${label}` : label}
+          >
+            {children}
+          </button>
+        );
+      }
+      return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+    },
+  };
 
   return (
-    <div className="text-[14px] text-ink leading-relaxed whitespace-pre-wrap">
-      {parts}
+    <div className="md">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {processed}
+      </ReactMarkdown>
       {streaming && (
         <span
           className="inline-block w-[2px] h-[1em] align-text-bottom ml-0.5 bg-ink animate-blink-cursor"
@@ -275,10 +458,7 @@ function SourcesList({ cited, onCiteClick }) {
             label = rationale ? `Database query — ${rationale}` : "Database query";
           }
           return (
-            <li
-              key={entry.n}
-              className="flex items-start gap-2 text-[12.5px] text-slate-700 leading-snug"
-            >
+            <li key={entry.n} className="flex items-start gap-2 text-[12.5px] text-slate-700 leading-snug">
               <span className="shrink-0 text-[10.5px] font-semibold text-slate-500 tabular-nums w-6 text-right pt-[2px]">
                 [{entry.n}]
               </span>
@@ -301,24 +481,15 @@ function SourcesList({ cited, onCiteClick }) {
   );
 }
 
-function Badge({ route, confidence, latency, fastPath }) {
-  const confClass = {
-    high: "conf-high",
-    medium: "conf-medium",
-    low: "conf-low",
-    refused: "conf-refused",
-  }[confidence] || "conf-low";
+function Badge({ latency }) {
+  if (!latency) return null;
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[10.5px] px-2 py-1 rounded border font-medium ${confClass}`}>
-      <span className={`inline-flex items-center px-1 py-0.5 rounded font-mono text-[9.5px] route-${route || "low"}`}>
-        {route || "?"}
-      </span>
-      <span className="uppercase tracking-wide">{confidence || "?"}</span>
-      <span className="text-slate-400">·</span>
-      <span className="tabular-nums">{latency ? `${(latency / 1000).toFixed(1)}s` : "—"}</span>
-      {fastPath && (
-        <span className="inline-block px-1 py-0.5 ml-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-bold tracking-wide">FP</span>
-      )}
+    <span className="inline-flex items-center gap-1 text-[10.5px] text-slate-400 tabular-nums">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
+      </svg>
+      {`${(latency / 1000).toFixed(1)}s`}
     </span>
   );
 }
@@ -371,7 +542,6 @@ const PATIENCE_SUBLINES = [
 ];
 
 function pickSubline(phaseKey, elapsed) {
-  // After 35s, blend in patience copy so we acknowledge the wait.
   const phasePhrases = PHASE_COPY[phaseKey]?.sublines || [];
   if (elapsed >= 35) {
     const pool = [...phasePhrases, ...PATIENCE_SUBLINES];
@@ -390,7 +560,6 @@ function ProgressTimeline({ phase, steps, route }) {
 
   const elapsedInt = Math.floor(elapsed);
 
-  // Figure out the current phase from event state.
   const hasPlan = !!route;
   const sqlStep = steps.find((s) => s.kind === "sql" && s.status === "started" || s.kind === "sql" && s.status === "done");
   const docsStep = steps.find((s) => s.kind === "docs" && s.status === "started" || s.kind === "docs" && s.status === "done");
@@ -406,7 +575,6 @@ function ProgressTimeline({ phase, steps, route }) {
   else if (phase === "answering" || allRetrievalDone) phaseKey = "composing";
   else phaseKey = "gathering";
 
-  // Build step list.
   const items = [];
   if (route) {
     items.push({ key: "plan", done: true, label: `Routed to ${route}` });
@@ -480,8 +648,6 @@ function ProgressTimeline({ phase, steps, route }) {
 }
 
 function BouncingDotsLoader({ compact = false }) {
-  // Three dots that bounce in sequence — small, indigo-tinted, matches the
-  // "thinking" feel of modern assistants.
   const size = compact ? "w-7 h-7" : "w-9 h-9";
   const dotSize = compact ? "w-1.5 h-1.5" : "w-2 h-2";
   return (
@@ -494,7 +660,6 @@ function BouncingDotsLoader({ compact = false }) {
 }
 
 function AnimatedDots() {
-  // Three dots that animate cyclically in the headline — like "Thinking..."
   return (
     <span className="inline-block ml-0.5">
       <span className="animate-blink-1">.</span>
@@ -518,4 +683,3 @@ function StepIcon({ done }) {
     </span>
   );
 }
-

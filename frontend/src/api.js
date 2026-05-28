@@ -19,22 +19,27 @@ export async function listModels() {
 /**
  * Streaming version. Consumes Server-Sent Events from /api/query/stream.
  * Callbacks fire in this order:
- *   onPlan({route, rationale, sql_query, sql_rationale, docs_query})  — step 1 done (early UI render)
- *   onStep({kind, status, ...})                                       — per-phase progress (sql/docs start/done)
+ *   onPlan({route, rationale, sql_query, sql_rationale, docs_query,
+ *           clarification, clarification_options})                     — step 1 done (early UI render)
+ *   onStep({kind, status, ...})                                        — per-phase progress (sql/docs start/done)
  *   onMeta({route, rationale, citations, evidence})                    — after SQL exec + Qdrant search
  *   onToken(text)                                                      — answer fragments
- *   onDone({confidence, latency_ms, fast_path?, gated?})
+ *   onDone({confidence, latency_ms, fast_path?, gated?, clarification_required?})
+ *   onFollowups({questions: [...]})                                    — optional, after done
  *   onError(err)
  */
-export async function streamQuery(question, { model = null, onPlan, onStep, onMeta, onToken, onDone, onError } = {}) {
+export async function streamQuery(question, { model = null, signal, onPlan, onStep, onMeta, onToken, onDone, onFollowups, onError } = {}) {
   let r;
   try {
     r = await fetch(`${BASE}/query/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, model }),
+      signal,
     });
   } catch (e) {
+    // Don't treat user-initiated cancel as an error.
+    if (e?.name === "AbortError") return;
     onError?.(e);
     return;
   }
@@ -63,21 +68,27 @@ export async function streamQuery(question, { model = null, onPlan, onStep, onMe
     else if (event === "meta") onMeta?.(parsed);
     else if (event === "token") onToken?.(parsed.text || "");
     else if (event === "done") onDone?.(parsed);
+    else if (event === "followups") onFollowups?.(parsed);
     else if (event === "error") onError?.(new Error(parsed.error || "stream error"));
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      if (block) handleEvent(block);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        if (block) handleEvent(block);
+      }
     }
+    if (buffer.trim()) handleEvent(buffer);
+  } catch (e) {
+    // Reader throws AbortError when the AbortController is triggered.
+    if (e?.name !== "AbortError") onError?.(e);
   }
-  if (buffer.trim()) handleEvent(buffer);
 }
 
 export async function ingestPdf(file) {

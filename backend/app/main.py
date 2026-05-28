@@ -148,6 +148,8 @@ async def query_stream(body: QueryIn):
                 elif event_type == "done":
                     done_payload = payload
                     yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+                elif event_type == "followups":
+                    yield f"event: followups\ndata: {json.dumps(payload)}\n\n"
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
         finally:

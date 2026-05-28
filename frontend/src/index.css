@@ -84,6 +84,114 @@ body {
 }
 .animate-blink-cursor { animation: blink-cursor 1s steps(1) infinite; }
 
+/* Gentle fade-in used for follow-up suggestions — soft easing, slight upward drift.
+   Apply with inline `animationDelay` for staggered reveal. `both` fill-mode keeps
+   the element invisible before its delay and visible after the animation ends. */
+@keyframes gentle-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.gentle-fade-in {
+  animation: gentle-fade-in 600ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+/* Shimmer/wave used in skeleton chips while follow-up questions are generating.
+   A soft horizontal sweep that suggests "content is on its way". */
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgb(241 245 249) 0%,
+    rgb(226 232 240) 35%,
+    rgb(203 213 225) 50%,
+    rgb(226 232 240) 65%,
+    rgb(241 245 249) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+}
+
+/* ---------- Markdown typography for assistant answers ---------- */
+.md {
+  @apply text-[14px] leading-relaxed text-ink;
+}
+.md > * + * { margin-top: 0.65em; }
+.md p { @apply text-[14px] leading-relaxed; }
+.md strong { @apply font-semibold text-ink; }
+.md em { @apply italic; }
+.md h1 { @apply text-[18px] font-semibold tracking-tight mt-4 mb-1; }
+.md h2 { @apply text-[16px] font-semibold tracking-tight mt-4 mb-1; }
+.md h3 { @apply text-[14.5px] font-semibold tracking-tight mt-3 mb-0.5; }
+.md ul { @apply list-disc pl-5 space-y-0.5; }
+.md ol { @apply list-decimal pl-5 space-y-0.5; }
+.md li { @apply leading-snug; }
+.md li > p { @apply mb-0; }
+.md a { @apply text-accent underline decoration-accent/30 underline-offset-2 hover:decoration-accent; }
+.md code {
+  @apply font-mono text-[12.5px] px-1 py-0.5 rounded
+         bg-slate-100 text-slate-800 border border-slate-200;
+}
+.md pre {
+  @apply font-mono text-[12px] leading-snug bg-slate-50 border border-slate-200
+         rounded-md p-3 overflow-x-auto;
+}
+.md pre code {
+  @apply bg-transparent border-0 p-0 text-slate-800;
+}
+.md blockquote {
+  @apply border-l-2 border-slate-300 pl-3 text-slate-600 italic;
+}
+.md table {
+  @apply text-[12.5px] border-collapse my-2;
+}
+.md th, .md td {
+  @apply border border-slate-200 px-2 py-1 text-left align-top;
+}
+.md th { @apply bg-slate-50 font-semibold; }
+.md hr { @apply my-3 border-slate-200; }
+
+/* ---------- Chat avatars ---------- */
+.avatar-ai {
+  @apply w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600
+         text-white text-[10px] font-bold tracking-tight
+         flex items-center justify-center shrink-0 shadow-sm;
+}
+.avatar-user {
+  @apply w-7 h-7 rounded-full bg-slate-700 text-white text-[11px] font-semibold
+         flex items-center justify-center shrink-0;
+}
+
+/* ---------- Composer ---------- */
+.composer-shell {
+  @apply rounded-2xl border border-slate-300 bg-white shadow-card
+         focus-within:border-slate-400 focus-within:shadow-md
+         transition-all;
+}
+.composer-textarea {
+  @apply w-full resize-none px-4 pt-3 pb-1 text-[14px] text-ink leading-snug
+         bg-transparent placeholder:text-slate-400
+         focus:outline-none disabled:opacity-50;
+  max-height: 200px;
+}
+.composer-btn {
+  @apply inline-flex items-center justify-center w-8 h-8 rounded-lg
+         text-slate-500 hover:bg-slate-100 hover:text-slate-700
+         disabled:opacity-40 disabled:cursor-not-allowed transition-colors;
+}
+.composer-send {
+  @apply inline-flex items-center justify-center w-8 h-8 rounded-lg
+         bg-ink text-white hover:bg-brand-800
+         disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed
+         transition-colors;
+}
+.composer-pill {
+  @apply inline-flex items-center gap-1 text-[11px] text-slate-600
+         px-2 py-1 rounded-md hover:bg-slate-100 transition-colors;
+}
+
 /* PDF citation highlight inside the pdf.js text layer.
    The text layer is positioned over the canvas and is normally transparent —
    we need to keep `color: transparent` so the user sees the rendered text on
