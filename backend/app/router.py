@@ -84,6 +84,12 @@ Q: "Which clients have upcoming SOL deadlines?"
 Q: "Does Robert have PT approval?"
 {"route":"hybrid","docs_query":"PT physical therapy approval workflow","sql_query":"SELECT r.first_name, r.last_name, pa.status, pa.approval_date FROM pt_approvals pa JOIN residents r ON r.id = pa.resident_id WHERE r.first_name = 'Robert'","sql_rationale":"Robert's PT approval status","rationale":"PT acronym -> physical therapy -> pt_approvals table"}
 
+Q: "What is the security deposit policy for a 2-year lease?"
+{"route":"docs","docs_query":"security deposit policy lease duration","sql_query":"","sql_rationale":"","rationale":"pure policy question — the '2-year lease' is a hypothetical condition in the policy, not a specific lease row to look up"}
+
+Q: "What is the late fee for rent paid 10 days late?"
+{"route":"docs","docs_query":"late fee policy rent","sql_query":"","sql_rationale":"","rationale":"policy parameter conditioned on a hypothetical — no specific tenant or lease referenced, so docs only"}
+
 The user's question + database schema follow.
 """
 
@@ -98,6 +104,8 @@ OUTPUT STYLE — write a clean, conversational paragraph. NEVER do any of these:
 - Do NOT include the literal SQL query text in your answer body. The `[sql:...]` citation marker at the end of a sentence is the only place SQL appears.
 - Write ISO dates like "2026-03-18" as "March 18, 2026". Write money as "$3,500.00".
 - Convert column names like `treatment_date` to natural English ("treatment on...").
+
+ENTITY ECHO — ALWAYS restate the person, property, or entity by name in your answer, even if the question already named them. Pronouns ("they", "the client", "the resident") are NOT acceptable substitutes when a name exists in the evidence. Example: instead of "She was admitted on Aug 12, 2025", write "Sarah Klein was admitted on August 12, 2025 [sql:...]".
 
 EVIDENCE IS SUFFICIENT IF EITHER source has it. You do NOT need both to be present:
 - DATABASE EVIDENCE alone IS sufficient to answer a question about specific records.
