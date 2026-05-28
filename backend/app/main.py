@@ -31,12 +31,6 @@ async def _startup() -> None:
         ensure_collection()
     except Exception:
         pass
-    if settings.enable_reranker:
-        try:
-            from .reranker import get_reranker
-            get_reranker()
-        except Exception:
-            pass
 
 
 class QueryIn(BaseModel):

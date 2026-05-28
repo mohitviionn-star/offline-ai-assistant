@@ -12,9 +12,6 @@ class Settings(BaseSettings):
 
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dim: int = 384
-    reranker_model: str = "BAAI/bge-reranker-base"
-    enable_reranker: bool = True
-    rerank_candidates: int = 20
 
     sqlite_path: str = "/data/business.db"
     audit_db_path: str = "/data/audit.db"
