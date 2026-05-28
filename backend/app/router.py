@@ -4,7 +4,7 @@ from typing import Any
 from .config import settings
 from .ollama_client import OllamaClient
 from .tool_docs import search_documents
-from .tool_sql import execute_sql, schema_summary, table_names
+from .tool_sql import execute_sql, execute_sql_with_repair, schema_summary, table_names
 
 # Retrieval-quality gate: below this top-1 cosine score, treat document hits as weak.
 DOC_SCORE_FLOOR = 0.40
@@ -31,7 +31,8 @@ DECISION HEURISTIC — apply in order:
 3. If the question is about policy, rules, terms, what the handbook/SOP/contract SAYS — route = "docs".
 4. If the question needs BOTH (records from the database AND policy/text from the documents) — route = "hybrid".
 5. When in doubt between docs and hybrid, PREFER hybrid.
-6. NEVER refuse to route — pick the best match.
+6. If the question contains an ACRONYM or domain jargon (SOL, PT, OT, DKA, MMI, UM/UIM, ePHI, MAR, ARDC, NPP, etc.) — route = "hybrid". The glossary document needs to be retrieved so we can translate the term to the actual schema/policy.
+7. NEVER refuse to route — pick the best match.
 
 SQL GENERATION RULES (apply when route is "sql" or "hybrid"):
 - Output a single SQLite SELECT query. No INSERT/UPDATE/DELETE/DDL.
@@ -76,6 +77,12 @@ Q: "Which leases are expiring in the next 6 months, and what does the handbook s
 
 Q: "Are pets allowed at 120 Maple Ave?"
 {"route":"hybrid","docs_query":"pet policy deposit","sql_query":"SELECT pr.address, l.pets_allowed, l.notes FROM leases l JOIN properties pr ON pr.id = l.property_id WHERE pr.address = '120 Maple Ave'","sql_rationale":"Pet allowance for that property","rationale":"property-specific rule + general policy"}
+
+Q: "Which clients have upcoming SOL deadlines?"
+{"route":"hybrid","docs_query":"SOL statute of limitations filing deadline","sql_query":"SELECT cl.first_name, cl.last_name, f.due_date FROM filings f JOIN cases ca ON ca.id = f.case_id JOIN clients cl ON cl.id = ca.client_id WHERE f.filing_type LIKE '%Statute%' AND date(f.due_date) >= date('now') ORDER BY f.due_date LIMIT 50","sql_rationale":"Clients with upcoming SOL filings","rationale":"acronym (SOL) -> glossary maps to filings.filing_type LIKE 'Statute%'"}
+
+Q: "Does Robert have PT approval?"
+{"route":"hybrid","docs_query":"PT physical therapy approval workflow","sql_query":"SELECT r.first_name, r.last_name, pa.status, pa.approval_date FROM pt_approvals pa JOIN residents r ON r.id = pa.resident_id WHERE r.first_name = 'Robert'","sql_rationale":"Robert's PT approval status","rationale":"PT acronym -> physical therapy -> pt_approvals table"}
 
 The user's question + database schema follow.
 """
@@ -426,7 +433,9 @@ async def answer(question: str, model: str | None = None) -> dict[str, Any]:
     # Run SQL execution + Qdrant search in parallel — they are independent.
     async def _do_sql():
         if route in ("sql", "hybrid") and p.get("sql_query"):
-            return await asyncio.to_thread(execute_sql, p["sql_query"], p.get("sql_rationale", ""))
+            return await execute_sql_with_repair(
+                p["sql_query"], p.get("sql_rationale", ""), question, model=model
+            )
         return {}
 
     async def _do_docs():
@@ -535,17 +544,29 @@ async def answer_stream(question: str, model: str | None = None):
     wants_sql = route in ("sql", "hybrid") and bool(p.get("sql_query"))
     wants_docs = route in ("docs", "hybrid") and bool(p.get("docs_query"))
 
+    # Speculative doc search on pure-SQL route: kick off in parallel using the
+    # question itself as the query. If SQL comes back strong we drop the task
+    # so the fast path fires without waiting for embeddings.
+    docs_query = p.get("docs_query")
+    docs_speculative = False
+    if route == "sql" and not wants_docs:
+        docs_query = question
+        wants_docs = True
+        docs_speculative = True
+
     # Announce what we're about to do
     if wants_sql:
         yield ("step", {"kind": "sql", "status": "started"})
     if wants_docs:
-        yield ("step", {"kind": "docs", "status": "started"})
+        yield ("step", {"kind": "docs", "status": "started", "speculative": docs_speculative})
 
     async def _do_sql():
-        return await asyncio.to_thread(execute_sql, p["sql_query"], p.get("sql_rationale", ""))
+        return await execute_sql_with_repair(
+            p["sql_query"], p.get("sql_rationale", ""), question, model=model
+        )
 
     async def _do_docs():
-        return await asyncio.to_thread(search_documents, p["docs_query"])
+        return await asyncio.to_thread(search_documents, docs_query)
 
     pending: set[asyncio.Task] = set()
     if wants_sql:
@@ -553,6 +574,7 @@ async def answer_stream(question: str, model: str | None = None):
     if wants_docs:
         pending.add(asyncio.create_task(_do_docs(), name="docs"))
 
+    bailed_for_fast_path = False
     while pending:
         done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
@@ -564,7 +586,22 @@ async def answer_stream(question: str, model: str | None = None):
                     "status": "done",
                     "row_count": sql_result.get("row_count", 0),
                     "has_error": bool(sql_result.get("error")),
+                    "repair_attempts": sql_result.get("repair_attempts", 0),
                 })
+                # Speculative-docs bailout: SQL is sufficient, drop the
+                # in-flight docs task so the fast path can emit immediately.
+                if (
+                    docs_speculative
+                    and not sql_result.get("error")
+                    and sql_result.get("row_count", 0) > 0
+                ):
+                    for t in list(pending):
+                        if t.get_name() == "docs":
+                            t.cancel()
+                            pending.discard(t)
+                            yield ("step", {"kind": "docs", "status": "skipped", "reason": "sql sufficient"})
+                    bailed_for_fast_path = True
+                    break
             elif name == "docs":
                 docs = task.result()
                 top_score = max((d.get("score", 0) for d in docs), default=0)
@@ -574,6 +611,8 @@ async def answer_stream(question: str, model: str | None = None):
                     "count": len(docs),
                     "top_score": round(float(top_score), 3),
                 })
+        if bailed_for_fast_path:
+            break
 
     strong_docs = bool(docs) and any(d.get("score", 0) >= DOC_SCORE_FLOOR for d in docs)
     strong_sql = bool(sql_result.get("sql")) and not sql_result.get("error") and sql_result.get("row_count", 0) > 0
@@ -594,8 +633,9 @@ async def answer_stream(question: str, model: str | None = None):
         yield ("done", {"confidence": "refused", "gated": True, "latency_ms": int((time.time() - t0) * 1000)})
         return
 
-    # Fast path — pure SQL, no answer LLM call.
-    if route == "sql" and strong_sql and not docs:
+    # Fast path — pure SQL, no answer LLM call. `not strong_docs` (rather than
+    # `not docs`) so weak speculative-doc hits don't push us off the fast path.
+    if route == "sql" and strong_sql and not strong_docs:
         yield ("meta", meta)
         yield ("token", _deterministic_sql_answer(sql_result, question))
         yield ("done", {"confidence": "medium", "fast_path": True, "latency_ms": int((time.time() - t0) * 1000)})
