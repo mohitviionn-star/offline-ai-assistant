@@ -11,28 +11,28 @@ def search_documents(
     per_doc_cap: int = 2,
     candidate_multiplier: int = 4,
 ) -> list[dict]:
-    """Vector-search ingested documents with per-document diversification.
+    """Vector-search ingested documents, optionally rerank with a cross-encoder,
+    then diversify per-document.
 
-    Without diversification, a single large PDF with hundreds of chunks
-    (e.g. NIST 800-66r2 has 509) can drown out shorter, more relevant
-    documents (e.g. a 5-chunk SOP) just by having more top-scoring chunks.
-
-    Strategy:
-      1. Pull `top_k * candidate_multiplier` candidates from Qdrant.
-      2. Group by filename.
-      3. Round-robin across files, taking at most `per_doc_cap` from each,
-         in original score order, until we have `top_k` results.
+    Pipeline:
+      1. Pull a wide candidate pool from Qdrant (bi-encoder cosine).
+      2. (Optional) Cross-encoder rerank the candidate pool.
+      3. Per-document round-robin: at most `per_doc_cap` chunks per file,
+         so a single huge PDF can't drown out smaller relevant ones.
     """
     k = top_k or settings.top_k
-    candidates_k = max(k * candidate_multiplier, k + 10)
+    if settings.enable_reranker:
+        candidates_k = max(settings.rerank_candidates, k + 10)
+    else:
+        candidates_k = max(k * candidate_multiplier, k + 10)
 
     vec = embed_query(query)
     hits = search(vec, candidates_k)
 
-    by_doc: dict[str, list[dict]] = defaultdict(list)
+    candidates: list[dict] = []
     for h in hits:
         p = h["payload"]
-        chunk = {
+        candidates.append({
             "doc_id": p.get("doc_id"),
             "filename": p.get("filename"),
             "page": p.get("page"),
@@ -40,13 +40,17 @@ def search_documents(
             "score": round(h["score"], 4),
             "text": p.get("text", ""),
             "citation": f"{p.get('filename')} p.{p.get('page')}",
-        }
-        # Cap per-document during accumulation so we don't waste memory
-        if len(by_doc[chunk["filename"]]) < per_doc_cap:
-            by_doc[chunk["filename"]].append(chunk)
+        })
 
-    # Round-robin: take the top hit from each doc, then the 2nd, etc.
-    # This guarantees small docs get representation alongside huge ones.
+    if settings.enable_reranker and candidates:
+        from .reranker import rerank
+        candidates = rerank(query, candidates, top_k=len(candidates))
+
+    by_doc: dict[str, list[dict]] = defaultdict(list)
+    for c in candidates:
+        if len(by_doc[c["filename"]]) < per_doc_cap:
+            by_doc[c["filename"]].append(c)
+
     results: list[dict] = []
     while len(results) < k and any(by_doc.values()):
         for filename in list(by_doc.keys()):

@@ -157,3 +157,97 @@ async def query_database(natural_language_question: str) -> dict:
     citation = f"sql:{result.get('sql','')[:60]}" if result.get("sql") else "sql:none"
     result["citation"] = citation
     return result
+
+
+SQL_REPAIR_PROMPT = """A previous SQLite query failed or returned no rows. Fix it.
+
+Original question: {question}
+Original rationale: {rationale}
+Failed SQL:
+{sql}
+
+Failure reason: {failure}
+
+Schema:
+{schema}
+
+Rules:
+- Output ONLY JSON: {{"sql": "<repaired query>", "rationale": "<what changed>"}}
+- SELECT only.
+- If the failure was "no rows", consider broadening filters (LIKE instead of =, drop overly-specific WHERE clauses, use case-insensitive matching).
+- If the failure was a SQL error, fix the syntax/column/table issue.
+- ALWAYS alias aggregates with a descriptive name.
+- Use LIMIT 50 when listing rows.
+- If you cannot repair the query, return {{"sql": "", "rationale": "<why unfixable>"}}.
+"""
+
+
+async def execute_sql_with_repair(
+    sql: str,
+    rationale: str,
+    question: str,
+    model: str | None = None,
+    max_attempts: int = 2,
+) -> dict:
+    """Run SQL, and on error or empty rows, ask the LLM to repair it once.
+    Adds `repair_attempts` and (when applicable) `repair_history` to the result."""
+    result = execute_sql(sql, rationale)
+    result["repair_attempts"] = 0
+
+    needs_repair = bool(result.get("error")) or (
+        not result.get("error") and result.get("row_count", 0) == 0
+    )
+    if not needs_repair or max_attempts < 1:
+        return result
+
+    history: list[dict] = [{"sql": sql, "error": result.get("error"), "row_count": result.get("row_count", 0)}]
+    client = OllamaClient(model=model)
+    schema = schema_summary(include_samples=False)
+
+    current_sql = sql
+    current_rationale = rationale
+    current_result = result
+
+    for attempt in range(1, max_attempts + 1):
+        failure = current_result.get("error") or f"query returned 0 rows"
+        prompt = SQL_REPAIR_PROMPT.format(
+            question=question,
+            rationale=current_rationale,
+            sql=current_sql,
+            failure=failure,
+            schema=schema,
+        )
+        try:
+            resp = await client.chat(
+                messages=[
+                    {"role": "system", "content": "You are a precise SQLite repair assistant."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                format="json",
+            )
+            raw = resp.get("message", {}).get("content", "{}")
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, Exception):
+            break
+
+        new_sql = (parsed.get("sql") or "").strip().rstrip(";")
+        if not new_sql or new_sql == current_sql:
+            break
+
+        new_rationale = parsed.get("rationale", current_rationale)
+        new_result = execute_sql(new_sql, new_rationale)
+        history.append({"sql": new_sql, "error": new_result.get("error"), "row_count": new_result.get("row_count", 0)})
+
+        if not new_result.get("error") and new_result.get("row_count", 0) > 0:
+            new_result["repair_attempts"] = attempt
+            new_result["repair_history"] = history
+            return new_result
+
+        current_sql = new_sql
+        current_rationale = new_rationale
+        current_result = new_result
+
+    current_result["repair_attempts"] = len(history) - 1
+    current_result["repair_history"] = history
+    return current_result
