@@ -682,42 +682,82 @@ function RenderAnswer({ text, cited, onCiteClick, streaming = false }) {
 }
 
 function SourcesList({ cited, onCiteClick }) {
+  const [open, setOpen] = useState(false);
+  const count = cited.length;
+  const docs = cited.filter((c) => c.kind === "doc").length;
+  const sql = count - docs;
+
+  // Short summary used in the collapsed pill: "3 sources · 2 docs · 1 query"
+  const summaryParts = [];
+  if (docs) summaryParts.push(`${docs} doc${docs === 1 ? "" : "s"}`);
+  if (sql) summaryParts.push(`${sql} quer${sql === 1 ? "y" : "ies"}`);
+  const summary = summaryParts.join(" · ");
+
   return (
-    <div className="mt-4 pt-3 border-t border-slate-100">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-1.5">
-        Sources <span className="text-slate-400 normal-case font-normal">— click a citation to see the evidence</span>
-      </div>
-      <ol className="space-y-1">
-        {cited.map((entry) => {
-          const cite = entry.cite;
-          const isDoc = entry.kind === "doc";
-          let label;
-          if (isDoc) {
-            label = entry.label;
-          } else {
-            const rationale = cite?.rationale;
-            label = rationale ? `Database query — ${rationale}` : "Database query";
-          }
-          return (
-            <li key={entry.n} className="flex items-start gap-2 text-[12.5px] text-slate-700 leading-snug">
-              <span className="shrink-0 text-[10.5px] font-semibold text-slate-500 tabular-nums w-6 text-right pt-[2px]">
-                [{entry.n}]
-              </span>
-              <button
-                onClick={() => cite && onCiteClick?.(cite)}
-                disabled={!cite}
-                className={`text-left flex-1 min-w-0 hover:underline ${cite ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
-                title={isDoc ? "Open in evidence panel" : "Inspect SQL + rows"}
-              >
-                <span className="mr-1 text-[10.5px]">{isDoc ? "📄" : "⚙"}</span>
-                <span className={isDoc ? "text-indigo-800 font-medium" : "text-emerald-800 font-medium font-mono"}>
-                  {label}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1.5 text-[11px] font-medium
+                   text-slate-500 hover:text-slate-700
+                   px-2 py-1 -ml-2 rounded-md hover:bg-slate-100 transition-colors"
+      >
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`transition-transform ${open ? "rotate-90" : ""}`}
+          aria-hidden
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+        <span>
+          {count} source{count === 1 ? "" : "s"}
+          {summary && <span className="text-slate-400 font-normal"> · {summary}</span>}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-2 pt-2.5 border-t border-slate-100">
+          <ol className="space-y-1">
+            {cited.map((entry) => {
+              const cite = entry.cite;
+              const isDoc = entry.kind === "doc";
+              let label;
+              if (isDoc) {
+                label = entry.label;
+              } else {
+                const rationale = cite?.rationale;
+                label = rationale ? `Database query — ${rationale}` : "Database query";
+              }
+              return (
+                <li key={entry.n} className="flex items-start gap-2 text-[12.5px] text-slate-700 leading-snug">
+                  <span className="shrink-0 text-[10.5px] font-semibold text-slate-500 tabular-nums w-6 text-right pt-[2px]">
+                    [{entry.n}]
+                  </span>
+                  <button
+                    onClick={() => cite && onCiteClick?.(cite)}
+                    disabled={!cite}
+                    className={`text-left flex-1 min-w-0 hover:underline ${cite ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
+                    title={isDoc ? "Open in evidence panel" : "Inspect SQL + rows"}
+                  >
+                    <span className="mr-1 text-[10.5px]">{isDoc ? "📄" : "⚙"}</span>
+                    <span className={isDoc ? "text-indigo-800 font-medium" : "text-emerald-800 font-medium font-mono"}>
+                      {label}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }

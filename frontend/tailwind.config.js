@@ -5,8 +5,9 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Brand surface (deep navy — used sparingly: top brand bar, status footer accents)
-        ink: "#0b1220",
+        // Primary text — warm near-black, not cold deep navy. Easier on
+        // long reads and reads "AI assistant" instead of "dashboard".
+        ink: "#1c1d22",
         brand: {
           900: "#0b1220",
           800: "#111a2e",

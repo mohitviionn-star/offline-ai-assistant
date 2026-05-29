@@ -42,11 +42,48 @@ function deriveTitle(messages) {
   return t.length > 60 ? t.slice(0, 60).trim() + "…" : t;
 }
 
+// A page refresh kills the active SSE fetch but localStorage still has the
+// half-finished assistant message marked `streaming: true`. We strip the
+// orphaned assistant message AND the user message that triggered it, then
+// remember the question so App can re-fire onAsk on mount — which re-appends
+// the user message naturally and starts a fresh stream.
+function scrubInterruptedMessages(convs) {
+  const pendingByConv = {};
+  const cleaned = convs.map((c) => {
+    const msgs = c.messages || [];
+    const interruptedIdx = msgs.findIndex((m) => m.streaming);
+    if (interruptedIdx === -1) return c;
+    let question = null;
+    let userIdx = -1;
+    for (let i = interruptedIdx - 1; i >= 0; i--) {
+      if (msgs[i].role === "user" && msgs[i].text) {
+        question = msgs[i].text;
+        userIdx = i;
+        break;
+      }
+    }
+    const dropIndexes = new Set([interruptedIdx, ...(userIdx >= 0 ? [userIdx] : [])]);
+    const filtered = msgs.filter((_, idx) => !dropIndexes.has(idx));
+    if (question) pendingByConv[c.id] = question;
+    return { ...c, messages: filtered };
+  });
+  return { cleaned, pendingByConv };
+}
+
 export default function App() {
+  // Holds questions to auto re-ask after refresh, keyed by conversation id.
+  // Populated once during the initial state hydration below; consumed by the
+  // mount effect lower down. Ephemeral — not persisted to localStorage.
+  const pendingRestartRef = useRef(null);
+
   const [conversations, setConversations] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_CONVS) || "null");
-      if (Array.isArray(stored) && stored.length) return stored;
+      if (Array.isArray(stored) && stored.length) {
+        const { cleaned, pendingByConv } = scrubInterruptedMessages(stored);
+        pendingRestartRef.current = pendingByConv;
+        return cleaned;
+      }
     } catch {}
     return [makeNewConversation()];
   });
@@ -185,6 +222,17 @@ export default function App() {
   useEffect(() => {
     refresh().catch(() => {});
   }, []);
+
+  // After mount, auto re-ask any question that was interrupted by a refresh.
+  // Waits for activeId to settle on a real conversation before firing.
+  useEffect(() => {
+    if (!activeId || !pendingRestartRef.current) return;
+    const q = pendingRestartRef.current[activeId];
+    if (!q) return;
+    // Clear immediately so a re-render or activeId flip can't double-fire.
+    pendingRestartRef.current[activeId] = null;
+    onAsk(q);
+  }, [activeId]);
 
   async function onAsk(question, opts = {}) {
     if (!question.trim()) return;
@@ -372,25 +420,36 @@ export default function App() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <div className="text-[10.5px] text-slate-400 hidden md:block">
-                Hybrid retrieval · on-prem LLM
-              </div>
               <button
                 onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
                 title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
                 aria-label="Toggle theme"
-                className="w-7 h-7 inline-flex items-center justify-center rounded-md text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors"
+                aria-pressed={theme === "dark"}
+                role="switch"
+                className="relative inline-flex items-center w-14 h-7 rounded-full
+                           bg-slate-200 hover:bg-slate-300 transition-colors
+                           border border-slate-300 dark:bg-slate-700 dark:border-slate-600
+                           dark:hover:bg-slate-600 cursor-pointer"
               >
-                {theme === "dark" ? (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <circle cx="12" cy="12" r="4" />
-                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-                  </svg>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                  </svg>
-                )}
+                <span
+                  className={`absolute top-[2px] left-[2px] w-[22px] h-[22px] rounded-full
+                              bg-white dark:bg-slate-900 shadow-sm
+                              flex items-center justify-center text-slate-600 dark:text-slate-200
+                              transition-transform duration-200 ease-out
+                              ${theme === "dark" ? "translate-x-[28px]" : "translate-x-0"}`}
+                  aria-hidden
+                >
+                  {theme === "dark" ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                    </svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="4" />
+                      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                    </svg>
+                  )}
+                </span>
               </button>
             </div>
           </header>
