@@ -8,11 +8,63 @@ body {
   @apply bg-slate-100 text-ink antialiased;
   font-family: "Inter", ui-sans-serif, system-ui;
   font-feature-settings: "cv11", "ss01", "ss03";  /* Inter tabular nums + stylistic alts */
+  transition: background-color 200ms ease, color 200ms ease;
 }
 
 /* ---------- Layout chrome ---------- */
 .app-shell { @apply h-full flex bg-slate-100; }
 .surface   { @apply bg-white border border-slate-200 shadow-card; }
+
+/* ---------- Dark mode overrides ----------
+   Pragmatic approach: override the heavily-used surface/border/text utilities
+   via .dark selectors so we don't need to add `dark:` variants to every
+   component. Covers the major reading surfaces; small chip colors (citation,
+   confidence) stay as-is — they read fine on dark backgrounds. */
+.dark body            { @apply bg-slate-950 text-slate-100; }
+.dark .app-shell      { @apply bg-slate-950; }
+.dark .surface        { @apply bg-slate-900 border-slate-800; }
+
+.dark .bg-white       { background-color: rgb(15 23 42) !important; }       /* slate-900 */
+.dark .bg-slate-50    { background-color: rgb(15 23 42) !important; }
+.dark .bg-slate-100   { background-color: rgb(30 41 59) !important; }       /* slate-800 */
+
+.dark .border-slate-100 { border-color: rgb(30 41 59) !important; }
+.dark .border-slate-200 { border-color: rgb(51 65 85) !important; }         /* slate-700 */
+.dark .border-slate-300 { border-color: rgb(71 85 105) !important; }        /* slate-600 */
+
+.dark .text-ink       { color: rgb(241 245 249) !important; }               /* slate-100 */
+.dark .text-slate-500 { color: rgb(148 163 184) !important; }
+.dark .text-slate-600 { color: rgb(203 213 225) !important; }               /* lift for readability */
+.dark .text-slate-700 { color: rgb(226 232 240) !important; }
+.dark .text-slate-800 { color: rgb(241 245 249) !important; }
+.dark .text-slate-400 { color: rgb(148 163 184) !important; }
+
+.dark .hover\:bg-slate-50:hover  { background-color: rgb(30 41 59) !important; }
+.dark .hover\:bg-slate-100:hover { background-color: rgb(51 65 85) !important; }
+.dark .hover\:bg-slate-200:hover { background-color: rgb(71 85 105) !important; }
+
+/* Composer textarea / inputs in dark mode */
+.dark textarea, .dark input { color: rgb(241 245 249); }
+.dark textarea::placeholder, .dark input::placeholder { color: rgb(100 116 139); }
+
+/* Code blocks: prism theme is light; use a dark scheme via override */
+.dark pre[class*="language-"] { background-color: rgb(30 41 59) !important; }
+.dark pre[class*="language-"] code,
+.dark pre[class*="language-"] span { color: rgb(226 232 240) !important; }
+
+/* Soft override for the citation chip pastels — they're still readable but dim them */
+.dark .bg-indigo-50  { background-color: rgba(99, 102, 241, 0.15) !important; }
+.dark .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.15) !important; }
+.dark .bg-amber-50   { background-color: rgba(245, 158, 11, 0.15) !important; }
+.dark .bg-rose-50    { background-color: rgba(244, 63, 94, 0.15) !important; }
+.dark .bg-violet-50  { background-color: rgba(139, 92, 246, 0.15) !important; }
+.dark .bg-indigo-100  { background-color: rgba(99, 102, 241, 0.25) !important; }
+.dark .bg-emerald-100 { background-color: rgba(16, 185, 129, 0.25) !important; }
+.dark .text-indigo-800  { color: rgb(165 180 252) !important; }
+.dark .text-emerald-800 { color: rgb(110 231 183) !important; }
+.dark .text-amber-800   { color: rgb(252 211 77) !important; }
+.dark .text-rose-800    { color: rgb(253 164 175) !important; }
+.dark .text-violet-800  { color: rgb(196 181 253) !important; }
 
 /* ---------- Section headers in the sidebar / panels ---------- */
 .eyebrow {

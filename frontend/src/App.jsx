@@ -59,13 +59,19 @@ export default function App() {
     try { localStorage.setItem(STORAGE_KEY_CONVS, JSON.stringify(conversations)); } catch {}
   }, [conversations]);
   useEffect(() => {
-    if (activeId) localStorage.setItem(STORAGE_KEY_ACTIVE, activeId);
+    try {
+      if (activeId) localStorage.setItem(STORAGE_KEY_ACTIVE, activeId);
+      else localStorage.removeItem(STORAGE_KEY_ACTIVE);
+    } catch {}
   }, [activeId]);
 
-  // Keep activeId pointing at a real conversation.
+  // Keep activeId pointing at a real conversation. When the stored activeId
+  // is missing/invalid, fall back to the MOST RECENTLY UPDATED conversation
+  // (not just `conversations[0]`, which is the most recently CREATED).
   useEffect(() => {
     if (!activeId || !conversations.find((c) => c.id === activeId)) {
-      setActiveId(conversations[0]?.id || null);
+      const sorted = [...conversations].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      setActiveId(sorted[0]?.id || null);
     }
   }, [conversations, activeId]);
 
@@ -98,6 +104,24 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState(null);  // null = backend default
   const abortRef = useRef(null);
+
+  // --- Mobile sidebar drawer ---
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // --- Theme (light/dark) ---
+  const [theme, setTheme] = useState(() => {
+    try {
+      const stored = localStorage.getItem("theme");
+      if (stored === "light" || stored === "dark") return stored;
+    } catch {}
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "dark") root.classList.add("dark");
+    else root.classList.remove("dark");
+    try { localStorage.setItem("theme", theme); } catch {}
+  }, [theme]);
 
   function onStop() {
     abortRef.current?.abort();
@@ -302,28 +326,72 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar
-        health={health}
-        schema={schema}
-        docs={docs}
-        conversations={conversations}
-        activeConversationId={activeId}
-        onNewConversation={onNewConversation}
-        onSelectConversation={onSelectConversation}
-        onRenameConversation={onRenameConversation}
-        onDeleteConversation={onDeleteConversation}
-      />
+      {/* Sidebar — fixed-drawer on mobile, inline on md+ */}
+      <div
+        className={`fixed inset-y-0 left-0 z-40 md:static md:translate-x-0 md:h-full md:flex transition-transform duration-200
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
+      >
+        <Sidebar
+          health={health}
+          schema={schema}
+          docs={docs}
+          conversations={conversations}
+          activeConversationId={activeId}
+          onNewConversation={() => { onNewConversation(); setSidebarOpen(false); }}
+          onSelectConversation={(id) => { onSelectConversation(id); setSidebarOpen(false); }}
+          onRenameConversation={onRenameConversation}
+          onDeleteConversation={onDeleteConversation}
+        />
+      </div>
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/30 z-30 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden
+        />
+      )}
       <main className="flex-1 flex min-w-0">
         <div className="flex-1 flex flex-col min-w-0">
-          <header className="h-12 flex items-center justify-between pl-6 pr-4 border-b border-slate-200 bg-white">
-            <div className="flex items-center gap-2.5 min-w-0">
+          <header className="h-12 flex items-center justify-between pl-3 md:pl-6 pr-4 border-b border-slate-200 bg-white">
+            <div className="flex items-center gap-2 min-w-0">
+              <button
+                onClick={() => setSidebarOpen(true)}
+                title="Menu"
+                aria-label="Open menu"
+                className="md:hidden w-7 h-7 inline-flex items-center justify-center rounded-md text-slate-600 hover:bg-slate-100"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <line x1="3" y1="6" x2="21" y2="6" />
+                  <line x1="3" y1="12" x2="21" y2="12" />
+                  <line x1="3" y1="18" x2="21" y2="18" />
+                </svg>
+              </button>
               <div className="avatar-ai w-6 h-6 rounded-lg !text-[9px]">AI</div>
-              <div className="text-[13px] font-semibold text-ink tracking-tight leading-tight">
+              <div className="text-[13px] font-semibold text-ink tracking-tight leading-tight truncate">
                 Grounded Assistant
               </div>
             </div>
-            <div className="text-[10.5px] text-slate-400 hidden md:block">
-              Hybrid retrieval · on-prem LLM
+            <div className="flex items-center gap-3">
+              <div className="text-[10.5px] text-slate-400 hidden md:block">
+                Hybrid retrieval · on-prem LLM
+              </div>
+              <button
+                onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+                title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                aria-label="Toggle theme"
+                className="w-7 h-7 inline-flex items-center justify-center rounded-md text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors"
+              >
+                {theme === "dark" ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                )}
+              </button>
             </div>
           </header>
           <Chat
