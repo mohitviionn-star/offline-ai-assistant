@@ -1,4 +1,26 @@
 import React from "react";
+import { Highlight, themes as prismThemes } from "prism-react-renderer";
+
+function SqlBlock({ sql }) {
+  return (
+    <Highlight code={sql || ""} language="sql" theme={prismThemes.github}>
+      {({ className, style, tokens, getLineProps, getTokenProps }) => (
+        <pre
+          className={`${className} text-[11.5px] font-mono leading-snug bg-slate-50 border border-slate-200 rounded-md p-3 whitespace-pre-wrap break-words`}
+          style={style}
+        >
+          {tokens.map((line, i) => (
+            <div key={i} {...getLineProps({ line })}>
+              {line.map((token, j) => (
+                <span key={j} {...getTokenProps({ token })} />
+              ))}
+            </div>
+          ))}
+        </pre>
+      )}
+    </Highlight>
+  );
+}
 
 export default function SourcePanel({ source, onClose, onOpenPdf }) {
   if (!source) {
@@ -22,7 +44,13 @@ export default function SourcePanel({ source, onClose, onOpenPdf }) {
   const isDoc = source.type === "document";
 
   return (
-    <aside className="w-[28rem] shrink-0 bg-white border-l border-slate-200 flex flex-col">
+    <>
+      {/* Mobile: full-screen overlay sheet */}
+      <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={onClose} aria-hidden />
+    <aside className="
+      fixed inset-y-0 right-0 z-40 w-full sm:w-[24rem] bg-white border-l border-slate-200 flex flex-col
+      lg:static lg:w-[28rem] lg:z-auto lg:shrink-0
+    ">
       <header className="px-5 py-3 border-b border-slate-200 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
@@ -41,6 +69,7 @@ export default function SourcePanel({ source, onClose, onOpenPdf }) {
 
       {isDoc ? <DocSource s={source} onOpenPdf={onOpenPdf} /> : <SqlSource s={source} />}
     </aside>
+    </>
   );
 }
 
@@ -81,9 +110,7 @@ function SqlSource({ s }) {
         <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 mb-2">
           Executed query
         </div>
-        <pre className="text-[11.5px] font-mono leading-snug text-slate-800 bg-slate-50 border border-slate-200 rounded-md p-3 whitespace-pre-wrap break-words">
-{s.sql}
-        </pre>
+        <SqlBlock sql={s.sql} />
         {s.rationale && (
           <div className="mt-2 text-[11.5px] text-slate-600 italic leading-snug">
             {s.rationale}

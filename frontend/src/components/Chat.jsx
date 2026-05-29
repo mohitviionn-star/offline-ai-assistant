@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Highlight, themes as prismThemes } from "prism-react-renderer";
 
 const SAMPLE_PROMPTS = [
   { vertical: "Healthcare · Nursing Home", icon: "◐", prompt: "Does Robert Miller have physical therapy approval, and what does our protocol say about PT eligibility?" },
@@ -21,10 +22,28 @@ function groupedPrompts() {
   return Object.entries(groups);
 }
 
+const DRAFT_KEY = "composer:draft";
+
+// Returns the Web Speech API recognition constructor, or null if unsupported.
+function getSpeechRecognition() {
+  if (typeof window === "undefined") return null;
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
 export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, onEditUserMessage, onFeedback, onCiteClick, models, selectedModel, onSelectModel }) {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(() => {
+    try { return localStorage.getItem(DRAFT_KEY) || ""; } catch { return ""; }
+  });
   const endRef = useRef(null);
   const textareaRef = useRef(null);
+
+  // Persist draft as the user types — debounced. Cleared on submit.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try { localStorage.setItem(DRAFT_KEY, input); } catch {}
+    }, 250);
+    return () => clearTimeout(t);
+  }, [input]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -48,6 +67,7 @@ export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, o
     if (!input.trim()) return;
     onAsk(input);
     setInput("");
+    try { localStorage.removeItem(DRAFT_KEY); } catch {}
   }
 
   function onKeyDown(e) {
@@ -57,6 +77,43 @@ export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, o
       submit();
     }
   }
+
+  // --- Voice input (Web Speech API) ---
+  const recognitionRef = useRef(null);
+  const [listening, setListening] = useState(false);
+  const speechBaseRef = useRef("");
+  const speechAvailable = !!getSpeechRecognition();
+
+  function toggleListening() {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const Recog = getSpeechRecognition();
+    if (!Recog) return;
+    const r = new Recog();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = navigator.language || "en-US";
+    speechBaseRef.current = input ? input + (input.endsWith(" ") ? "" : " ") : "";
+    r.onresult = (e) => {
+      let interim = "";
+      let final = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        if (res.isFinal) final += res[0].transcript;
+        else interim += res[0].transcript;
+      }
+      if (final) speechBaseRef.current += final;
+      setInput(speechBaseRef.current + interim);
+    };
+    r.onerror = () => setListening(false);
+    r.onend = () => setListening(false);
+    recognitionRef.current = r;
+    try { r.start(); setListening(true); } catch {}
+  }
+
+  useEffect(() => () => recognitionRef.current?.stop?.(), []);
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-white">
@@ -96,6 +153,22 @@ export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, o
             />
             <div className="flex items-center justify-between px-2 pb-2">
               <div className="flex items-center gap-1">
+                {speechAvailable && (
+                  <button
+                    type="button"
+                    onClick={toggleListening}
+                    title={listening ? "Stop listening" : "Voice input"}
+                    aria-label={listening ? "Stop listening" : "Voice input"}
+                    className={`composer-btn ${listening ? "!text-red-600 animate-soft-pulse" : ""}`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill={listening ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                      <line x1="12" y1="19" x2="12" y2="23" />
+                      <line x1="8" y1="23" x2="16" y2="23" />
+                    </svg>
+                  </button>
+                )}
                 {models && models.length > 0 && (
                   <ModelPill models={models} selectedModel={selectedModel} onSelectModel={onSelectModel} disabled={pending} />
                 )}
@@ -542,6 +615,35 @@ function RenderAnswer({ text, cited, onCiteClick, streaming = false }) {
   const processed = preprocess(text || "", cited);
 
   const components = {
+    code: ({ inline, className, children, ...rest }) => {
+      const text = String(children || "").replace(/\n$/, "");
+      const lang = (className || "").match(/language-(\w+)/)?.[1] || "sql";
+      if (inline) {
+        return (
+          <code className="px-1 py-0.5 rounded bg-slate-100 text-[0.92em] font-mono text-slate-800" {...rest}>
+            {children}
+          </code>
+        );
+      }
+      return (
+        <Highlight code={text} language={lang} theme={prismThemes.github}>
+          {({ className: cn, style, tokens, getLineProps, getTokenProps }) => (
+            <pre
+              className={`${cn} mt-2 mb-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] font-mono leading-snug overflow-x-auto`}
+              style={style}
+            >
+              {tokens.map((line, i) => (
+                <div key={i} {...getLineProps({ line })}>
+                  {line.map((token, j) => (
+                    <span key={j} {...getTokenProps({ token })} />
+                  ))}
+                </div>
+              ))}
+            </pre>
+          )}
+        </Highlight>
+      );
+    },
     a: ({ href, children }) => {
       if (typeof href === "string" && href.startsWith(`${CITE_SCHEME}-`)) {
         const kind = href.startsWith(`${CITE_SCHEME}-doc`) ? "doc" : "sql";
