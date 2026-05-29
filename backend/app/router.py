@@ -139,18 +139,49 @@ READING SQL RESULTS — READ LITERALLY
 
 REFUSAL — use ONLY when neither source has relevant evidence:
 "I don't have enough grounded information to answer that. Try rephrasing or upload a relevant document."
+
+MULTI-TURN — if the context block contains a "Recent conversation" transcript above the EVIDENCE section, it is there only to resolve pronouns ("she", "his", "that case") and continuity references. Do NOT cite citations from prior assistant turns — only cite from the current EVIDENCE block. Do NOT repeat the prior assistant's answer; just respond to the current question.
 """
+
+
+# Cap on how many prior turns we forward to the LLMs. Older context is dropped.
+HISTORY_TURN_CAP = 6  # roughly 3 user/assistant pairs
+ASSISTANT_HISTORY_PREVIEW_CHARS = 240  # truncate past answers so we don't bloat tokens
+
+
+def _format_history(history: list[dict] | None) -> str:
+    """Render recent conversation as a compact transcript. Assistant responses
+    are truncated so the prompt doesn't blow up on long answers. Returns "" if
+    history is empty/None — caller can branch cheaply."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history[-HISTORY_TURN_CAP:]:
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if not content or role not in ("user", "assistant"):
+            continue
+        if role == "assistant" and len(content) > ASSISTANT_HISTORY_PREVIEW_CHARS:
+            content = content[:ASSISTANT_HISTORY_PREVIEW_CHARS].rstrip() + "…"
+        lines.append(f"{'USER' if role == 'user' else 'ASSISTANT'}: {content}")
+    return "Recent conversation (for context, resolve pronouns from here):\n" + "\n".join(lines)
 
 
 # ----------------------------------------------------------------------
 # Planning + SQL gen in ONE LLM call
 # ----------------------------------------------------------------------
-async def plan_and_sql(question: str, model: str | None = None) -> dict[str, Any]:
+async def plan_and_sql(question: str, model: str | None = None, history: list[dict] | None = None) -> dict[str, Any]:
     """Single LLM call that returns route + docs_query + sql_query (if applicable).
     Replaces the previous two-call sequence of plan() + nl_to_sql()."""
     client = OllamaClient(model=model)
     schema = schema_summary(include_samples=False)  # terse schema — faster prefill
-    user_msg = f"Database schema:\n{schema}\n\nUser question: {question}"
+    history_block = _format_history(history)
+    user_msg_parts = []
+    if history_block:
+        user_msg_parts.append(history_block)
+    user_msg_parts.append(f"Database schema:\n{schema}")
+    user_msg_parts.append(f"User question: {question}")
+    user_msg = "\n\n".join(user_msg_parts)
     resp = await client.chat(
         messages=[
             {"role": "system", "content": PLAN_SYSTEM},
@@ -449,9 +480,9 @@ def _deterministic_sql_answer(sql_result: dict, question: str) -> str:
 # ----------------------------------------------------------------------
 # Main answer pipeline
 # ----------------------------------------------------------------------
-async def answer(question: str, model: str | None = None) -> dict[str, Any]:
+async def answer(question: str, model: str | None = None, history: list[dict] | None = None) -> dict[str, Any]:
     import asyncio
-    p = await plan_and_sql(question, model=model)
+    p = await plan_and_sql(question, model=model, history=history)
     route = p["route"]
 
     # Run SQL execution + Qdrant search in parallel — they are independent.
@@ -499,6 +530,9 @@ async def answer(question: str, model: str | None = None) -> dict[str, Any]:
 
     # Otherwise, compose with the answer LLM.
     context_blocks = []
+    history_block = _format_history(history)
+    if history_block:
+        context_blocks.append(history_block)
     if docs:
         context_blocks.append("DOCUMENT EVIDENCE:\n" + _format_doc_context(docs))
     if sql_result:
@@ -531,7 +565,7 @@ async def answer(question: str, model: str | None = None) -> dict[str, Any]:
     }
 
 
-async def answer_stream(question: str, model: str | None = None):
+async def answer_stream(question: str, model: str | None = None, history: list[dict] | None = None):
     """Streaming version of answer(): yields (event_type, data) tuples.
     Event types in order:
       - 'plan'  → emitted RIGHT AFTER step 1 (route + planned sql/docs query). UI
@@ -546,7 +580,7 @@ async def answer_stream(question: str, model: str | None = None):
     t0 = time.time()
 
     # --- Step 1: plan + sql gen (one LLM call) ---
-    p = await plan_and_sql(question, model=model)
+    p = await plan_and_sql(question, model=model, history=history)
     route = p["route"]
 
     # Emit `plan` event immediately so the UI can render route + SQL preview
@@ -690,6 +724,9 @@ async def answer_stream(question: str, model: str | None = None):
     yield ("meta", meta)
 
     context_blocks = []
+    history_block = _format_history(history)
+    if history_block:
+        context_blocks.append(history_block)
     if docs:
         context_blocks.append("DOCUMENT EVIDENCE:\n" + _format_doc_context(docs))
     if sql_result:

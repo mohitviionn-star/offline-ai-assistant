@@ -28,13 +28,13 @@ export async function listModels() {
  *   onFollowups({questions: [...]})                                    — optional, after done
  *   onError(err)
  */
-export async function streamQuery(question, { model = null, signal, onPlan, onStep, onMeta, onToken, onDone, onFollowups, onError } = {}) {
+export async function streamQuery(question, { model = null, history = null, signal, onPlan, onStep, onMeta, onToken, onDone, onFollowups, onError } = {}) {
   let r;
   try {
     r = await fetch(`${BASE}/query/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, model }),
+      body: JSON.stringify({ question, model, history }),
       signal,
     });
   } catch (e) {

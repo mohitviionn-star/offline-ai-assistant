@@ -21,7 +21,7 @@ function groupedPrompts() {
   return Object.entries(groups);
 }
 
-export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, onFeedback, onCiteClick, models, selectedModel, onSelectModel, onUploadClick, uploadStatus }) {
+export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, onEditUserMessage, onFeedback, onCiteClick, models, selectedModel, onSelectModel }) {
   const [input, setInput] = useState("");
   const endRef = useRef(null);
   const textareaRef = useRef(null);
@@ -69,10 +69,12 @@ export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, o
               msg={m}
               idx={i}
               isLast={i === messages.length - 1}
+              isLastUser={m.role === "user" && i === messages.length - 2}
               pending={pending}
               onCiteClick={onCiteClick}
               onAsk={onAsk}
               onRegenerate={onRegenerate}
+              onEditUserMessage={onEditUserMessage}
               onFeedback={onFeedback}
             />
           ))}
@@ -94,25 +96,8 @@ export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, o
             />
             <div className="flex items-center justify-between px-2 pb-2">
               <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={onUploadClick}
-                  disabled={pending}
-                  className="composer-btn"
-                  title="Attach a PDF (ingests into knowledge base)"
-                  aria-label="Attach PDF"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                  </svg>
-                </button>
                 {models && models.length > 0 && (
                   <ModelPill models={models} selectedModel={selectedModel} onSelectModel={onSelectModel} disabled={pending} />
-                )}
-                {uploadStatus && (
-                  <span className="text-[10.5px] text-slate-500 ml-2 truncate max-w-[220px]" title={uploadStatus}>
-                    {uploadStatus}
-                  </span>
                 )}
               </div>
               <div className="flex items-center gap-2">
@@ -219,14 +204,15 @@ function EmptyState({ onAsk }) {
   );
 }
 
-function Message({ msg, idx, isLast, pending, onCiteClick, onAsk, onRegenerate, onFeedback }) {
+function Message({ msg, idx, isLast, isLastUser, pending, onCiteClick, onAsk, onRegenerate, onEditUserMessage, onFeedback }) {
   if (msg.role === "user") {
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-slate-100 border border-slate-200 px-4 py-2.5 text-[14px] text-ink leading-snug whitespace-pre-wrap">
-          {msg.text}
-        </div>
-      </div>
+      <UserMessage
+        msg={msg}
+        idx={idx}
+        editable={isLastUser && !pending}
+        onSave={(newText) => onEditUserMessage?.(idx, newText)}
+      />
     );
   }
 
@@ -288,6 +274,110 @@ function Message({ msg, idx, isLast, pending, onCiteClick, onAsk, onRegenerate, 
         )}
         {!isStreaming && !showClarification && (followups.length > 0 || msg.followups_pending) && (
           <FollowupsRow questions={followups} pending={msg.followups_pending} onAsk={onAsk} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UserMessage({ msg, editable, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(msg.text || "");
+  const textareaRef = useRef(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(msg.text || "");
+  }, [msg.text, editing]);
+
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = el.scrollHeight + "px";
+  }, [editing, draft]);
+
+  function startEdit() {
+    setDraft(msg.text || "");
+    setEditing(true);
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (!trimmed || trimmed === (msg.text || "").trim()) {
+      setEditing(false);
+      return;
+    }
+    setEditing(false);
+    onSave?.(trimmed);
+  }
+
+  function cancel() {
+    setDraft(msg.text || "");
+    setEditing(false);
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      commit();
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] w-full rounded-2xl rounded-br-md bg-white border border-indigo-300 ring-2 ring-indigo-100 px-3.5 py-2.5">
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={1}
+            className="w-full resize-none bg-transparent outline-none text-[14px] text-ink leading-snug max-h-[200px]"
+          />
+          <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-slate-100">
+            <span className="text-[10.5px] text-slate-400 mr-auto">Esc to cancel · ⌘↵ to save</span>
+            <button
+              onClick={cancel}
+              className="text-[11.5px] px-2.5 py-1 rounded-md text-slate-600 hover:bg-slate-100"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={commit}
+              disabled={!draft.trim() || draft.trim() === (msg.text || "").trim()}
+              className="text-[11.5px] px-2.5 py-1 rounded-md bg-ink text-white hover:bg-slate-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed"
+            >
+              Save & resend
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-end group">
+      <div className="max-w-[85%] relative rounded-2xl rounded-br-md bg-slate-100 border border-slate-200 px-4 py-2.5 text-[14px] text-ink leading-snug whitespace-pre-wrap">
+        {msg.text}
+        {editable && (
+          <button
+            onClick={startEdit}
+            title="Edit and resend"
+            aria-label="Edit message"
+            className="absolute -top-2.5 -left-2.5 w-6 h-6 rounded-full bg-white border border-slate-200 shadow-sm
+                       text-slate-500 hover:text-ink hover:border-slate-400 opacity-0 group-hover:opacity-100
+                       transition-opacity inline-flex items-center justify-center"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+            </svg>
+          </button>
         )}
       </div>
     </div>
