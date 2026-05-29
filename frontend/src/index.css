@@ -4,67 +4,202 @@
 
 html, body, #root { height: 100%; }
 
+/* ---------- Light mode — "AI assistant" palette ----------
+   Same design philosophy as dark mode: warm neutral canvas, surfaces lift
+   by a whisper instead of by harsh borders, very low chrome. The radial
+   highlight at top mirrors dark mode for a consistent "lifted" feel. */
+:root {
+  --l-canvas:        #fafaf9;   /* warm off-white, not cold slate-100 */
+  --l-surface-1:     #ffffff;   /* chat area, composer, sidebar */
+  --l-surface-2:     #f4f4f2;   /* user bubble, hover targets */
+  --l-surface-3:     #ebebe9;   /* active/hover */
+  --l-border:        rgba(0, 0, 0, 0.06);   /* whisper-level edge */
+  --l-border-strong: rgba(0, 0, 0, 0.12);   /* focus / hover */
+  --l-text:          #1c1d22;   /* primary (also wired through tailwind `ink`) */
+  --l-text-muted:    #6b6f76;
+  --l-text-faint:    #9aa0a8;
+}
+
 body {
-  @apply bg-slate-100 text-ink antialiased;
+  @apply text-ink antialiased;
   font-family: "Inter", ui-sans-serif, system-ui;
   font-feature-settings: "cv11", "ss01", "ss03";  /* Inter tabular nums + stylistic alts */
+  background:
+    radial-gradient(1200px 600px at 50% -200px, rgba(0, 0, 0, 0.025), transparent 70%),
+    var(--l-canvas);
   transition: background-color 200ms ease, color 200ms ease;
 }
 
 /* ---------- Layout chrome ---------- */
-.app-shell { @apply h-full flex bg-slate-100; }
-.surface   { @apply bg-white border border-slate-200 shadow-card; }
+.app-shell { @apply h-full flex; background: transparent; }
+.surface   { background-color: var(--l-surface-1); border: 1px solid var(--l-border); @apply shadow-card; }
 
-/* ---------- Dark mode overrides ----------
-   Pragmatic approach: override the heavily-used surface/border/text utilities
-   via .dark selectors so we don't need to add `dark:` variants to every
-   component. Covers the major reading surfaces; small chip colors (citation,
-   confidence) stay as-is — they read fine on dark backgrounds. */
-.dark body            { @apply bg-slate-950 text-slate-100; }
-.dark .app-shell      { @apply bg-slate-950; }
-.dark .surface        { @apply bg-slate-900 border-slate-800; }
+/* Soften slate utilities globally — borders barely visible, surface tints warm */
+.bg-slate-100 { background-color: var(--l-surface-2) !important; }
+.border-slate-200 { border-color: var(--l-border) !important; }
+.border-slate-300 { border-color: var(--l-border-strong) !important; }
+.border-slate-100 { border-color: var(--l-border) !important; }
 
-.dark .bg-white       { background-color: rgb(15 23 42) !important; }       /* slate-900 */
-.dark .bg-slate-50    { background-color: rgb(15 23 42) !important; }
-.dark .bg-slate-100   { background-color: rgb(30 41 59) !important; }       /* slate-800 */
+.hover\:bg-slate-100:hover { background-color: var(--l-surface-3) !important; }
+.hover\:bg-slate-200:hover { background-color: var(--l-surface-3) !important; }
 
-.dark .border-slate-100 { border-color: rgb(30 41 59) !important; }
-.dark .border-slate-200 { border-color: rgb(51 65 85) !important; }         /* slate-700 */
-.dark .border-slate-300 { border-color: rgb(71 85 105) !important; }        /* slate-600 */
+/* Citation pastels — washed out so they whisper, not shout */
+.bg-indigo-50  { background-color: rgba(99, 102, 241, 0.06) !important; }
+.bg-emerald-50 { background-color: rgba(16, 185, 129, 0.06) !important; }
+.bg-amber-50   { background-color: rgba(245, 158, 11, 0.06) !important; }
+.bg-rose-50    { background-color: rgba(244, 63, 94, 0.06) !important; }
+.bg-violet-50  { background-color: rgba(139, 92, 246, 0.06) !important; }
+.bg-indigo-100  { background-color: rgba(99, 102, 241, 0.12) !important; }
+.bg-emerald-100 { background-color: rgba(16, 185, 129, 0.12) !important; }
+.border-indigo-200  { border-color: rgba(99, 102, 241, 0.18) !important; }
+.border-emerald-200 { border-color: rgba(16, 185, 129, 0.18) !important; }
+.border-amber-200   { border-color: rgba(245, 158, 11, 0.18) !important; }
+.border-rose-200    { border-color: rgba(244, 63, 94, 0.18) !important; }
+.border-violet-200  { border-color: rgba(139, 92, 246, 0.18) !important; }
 
-.dark .text-ink       { color: rgb(241 245 249) !important; }               /* slate-100 */
-.dark .text-slate-500 { color: rgb(148 163 184) !important; }
-.dark .text-slate-600 { color: rgb(203 213 225) !important; }               /* lift for readability */
-.dark .text-slate-700 { color: rgb(226 232 240) !important; }
-.dark .text-slate-800 { color: rgb(241 245 249) !important; }
-.dark .text-slate-400 { color: rgb(148 163 184) !important; }
+/* AI avatar glow — same soft halo as dark mode, just tuned for white bg */
+.avatar-ai {
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.04), 0 6px 20px rgba(124, 119, 246, 0.18);
+}
 
-.dark .hover\:bg-slate-50:hover  { background-color: rgb(30 41 59) !important; }
-.dark .hover\:bg-slate-100:hover { background-color: rgb(51 65 85) !important; }
-.dark .hover\:bg-slate-200:hover { background-color: rgb(71 85 105) !important; }
+/* Composer focus halo */
+.composer-shell:focus-within {
+  box-shadow: 0 0 0 1px var(--l-border-strong), 0 0 32px rgba(0, 0, 0, 0.03);
+}
 
-/* Composer textarea / inputs in dark mode */
-.dark textarea, .dark input { color: rgb(241 245 249); }
-.dark textarea::placeholder, .dark input::placeholder { color: rgb(100 116 139); }
+/* Light-mode scrollbars — subtle, blend with canvas */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--l-surface-3); border-radius: 8px; border: 2px solid var(--l-canvas); }
+::-webkit-scrollbar-thumb:hover { background: var(--l-border-strong); }
 
-/* Code blocks: prism theme is light; use a dark scheme via override */
-.dark pre[class*="language-"] { background-color: rgb(30 41 59) !important; }
+/* ---------- Dark mode — "AI assistant" palette ----------
+   Inspired by Claude.ai / ChatGPT / Perplexity dark. Goals over the previous
+   GitHub-charcoal pass:
+   - WARMER neutral base — true neutral with a hint of warmth, not blue.
+   - LOWER contrast between surfaces — feel airy, not stacked.
+   - Borders mostly invisible — separation comes from spacing & subtle lift.
+   - Softer primary text (#ededee), never pure white.
+   - One soft glow accent on the AI avatar so it feels alive without shouting. */
+.dark {
+  --d-canvas:        #1c1c1f;   /* main app background — warm neutral */
+  --d-surface-1:     #232327;   /* sidebar, source panel, headers — barely lifted */
+  --d-surface-2:     #2a2a2f;   /* composer, message bubble */
+  --d-surface-3:     #34343a;   /* hover / active / code blocks */
+  --d-border:        rgba(255, 255, 255, 0.06);   /* whisper-level edge */
+  --d-border-strong: rgba(255, 255, 255, 0.14);   /* focus only */
+  --d-text:          #ededee;   /* primary — soft white, not harsh */
+  --d-text-muted:    #a8a9ad;   /* secondary */
+  --d-text-faint:    #76777b;   /* tertiary / placeholders */
+}
+
+/* Body gets a whisper of light at the top — adds depth without color and
+   gives the dark mode the "lifted" feel of a real product, not a flat sheet. */
+.dark body {
+  color: var(--d-text);
+  background:
+    radial-gradient(1200px 600px at 50% -200px, rgba(255, 255, 255, 0.025), transparent 70%),
+    var(--d-canvas);
+}
+.dark .app-shell { background: transparent; }
+.dark .surface   { background-color: var(--d-surface-1); border-color: var(--d-border); }
+
+/* Background utility overrides — every white/light surface lifts to the
+   appropriate elevation. */
+.dark .bg-white       { background-color: var(--d-surface-1) !important; }
+.dark .bg-slate-50    { background-color: var(--d-surface-2) !important; }
+.dark .bg-slate-100   { background-color: var(--d-surface-2) !important; }
+
+/* Composer/cards lift one more step so they read as "input-able". */
+.dark .composer-shell { background-color: var(--d-surface-2) !important; border-color: var(--d-border) !important; }
+.dark .composer-shell:focus-within { border-color: var(--d-border-strong) !important; }
+
+/* Borders */
+.dark .border-slate-100 { border-color: var(--d-border) !important; }
+.dark .border-slate-200 { border-color: var(--d-border) !important; }
+.dark .border-slate-300 { border-color: var(--d-border-strong) !important; }
+.dark .divide-slate-200 > * + * { border-color: var(--d-border) !important; }
+
+/* Text */
+.dark .text-ink       { color: var(--d-text) !important; }
+.dark .text-slate-400 { color: var(--d-text-faint) !important; }
+.dark .text-slate-500 { color: var(--d-text-muted) !important; }
+.dark .text-slate-600 { color: var(--d-text-muted) !important; }
+.dark .text-slate-700 { color: var(--d-text) !important; }
+.dark .text-slate-800 { color: var(--d-text) !important; }
+
+/* Hovers */
+.dark .hover\:bg-slate-50:hover  { background-color: var(--d-surface-2) !important; }
+.dark .hover\:bg-slate-100:hover { background-color: var(--d-surface-3) !important; }
+.dark .hover\:bg-slate-200:hover { background-color: var(--d-surface-3) !important; }
+
+/* Inputs */
+.dark textarea, .dark input, .dark select { color: var(--d-text); background-color: transparent; }
+.dark textarea::placeholder, .dark input::placeholder { color: var(--d-text-faint); }
+
+/* Code blocks — match GitHub-dark vibe, not the light prism default */
+.dark pre[class*="language-"] {
+  background-color: var(--d-surface-3) !important;
+  border-color: var(--d-border) !important;
+}
 .dark pre[class*="language-"] code,
-.dark pre[class*="language-"] span { color: rgb(226 232 240) !important; }
+.dark pre[class*="language-"] span { color: var(--d-text) !important; }
+.dark .md code {
+  background-color: var(--d-surface-3) !important;
+  border-color: var(--d-border) !important;
+  color: #d6deeb !important;
+}
 
-/* Soft override for the citation chip pastels — they're still readable but dim them */
-.dark .bg-indigo-50  { background-color: rgba(99, 102, 241, 0.15) !important; }
-.dark .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.15) !important; }
-.dark .bg-amber-50   { background-color: rgba(245, 158, 11, 0.15) !important; }
-.dark .bg-rose-50    { background-color: rgba(244, 63, 94, 0.15) !important; }
-.dark .bg-violet-50  { background-color: rgba(139, 92, 246, 0.15) !important; }
-.dark .bg-indigo-100  { background-color: rgba(99, 102, 241, 0.25) !important; }
-.dark .bg-emerald-100 { background-color: rgba(16, 185, 129, 0.25) !important; }
-.dark .text-indigo-800  { color: rgb(165 180 252) !important; }
-.dark .text-emerald-800 { color: rgb(110 231 183) !important; }
-.dark .text-amber-800   { color: rgb(252 211 77) !important; }
-.dark .text-rose-800    { color: rgb(253 164 175) !important; }
-.dark .text-violet-800  { color: rgb(196 181 253) !important; }
+/* Citation / badge tints — washed-out, never saturated.
+   The text colors stay vivid enough to read; the backgrounds whisper. */
+.dark .bg-indigo-50  { background-color: rgba(125, 145, 254, 0.08) !important; }
+.dark .bg-emerald-50 { background-color: rgba(52, 211, 153, 0.08) !important; }
+.dark .bg-amber-50   { background-color: rgba(251, 191, 36, 0.08) !important; }
+.dark .bg-rose-50    { background-color: rgba(244, 114, 128, 0.08) !important; }
+.dark .bg-violet-50  { background-color: rgba(167, 139, 250, 0.08) !important; }
+.dark .bg-indigo-100  { background-color: rgba(125, 145, 254, 0.16) !important; }
+.dark .bg-emerald-100 { background-color: rgba(52, 211, 153, 0.16) !important; }
+
+.dark .border-indigo-200  { border-color: rgba(125, 145, 254, 0.20) !important; }
+.dark .border-emerald-200 { border-color: rgba(52, 211, 153, 0.20) !important; }
+.dark .border-amber-200   { border-color: rgba(251, 191, 36, 0.20) !important; }
+.dark .border-rose-200    { border-color: rgba(244, 114, 128, 0.20) !important; }
+.dark .border-violet-200  { border-color: rgba(167, 139, 250, 0.20) !important; }
+
+.dark .text-indigo-800  { color: #a5b4fc !important; }
+.dark .text-emerald-800 { color: #6ee7b7 !important; }
+.dark .text-amber-800   { color: #fcd34d !important; }
+.dark .text-rose-800    { color: #fda4af !important; }
+.dark .text-violet-800  { color: #c4b5fd !important; }
+
+/* Scrollbars — match the surface so they don't draw attention */
+.dark ::-webkit-scrollbar { width: 10px; height: 10px; }
+.dark ::-webkit-scrollbar-track { background: transparent; }
+.dark ::-webkit-scrollbar-thumb { background: var(--d-surface-3); border-radius: 8px; border: 2px solid var(--d-canvas); }
+.dark ::-webkit-scrollbar-thumb:hover { background: var(--d-border-strong); }
+
+/* The composer fade-out (Chat.jsx uses from-white via-white in light mode).
+   In dark mode the fade has to come from the canvas, not white. */
+.dark .from-white { --tw-gradient-from: var(--d-canvas) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to, rgba(28,28,31,0)) !important; }
+.dark .via-white  { --tw-gradient-stops: var(--tw-gradient-from), var(--d-canvas), var(--tw-gradient-to, rgba(28,28,31,0)) !important; }
+.dark .to-white\/0 { --tw-gradient-to: rgba(28,28,31,0) !important; }
+
+/* AI avatar gradient — softer + a gentle outer glow in dark mode. The light
+   mode keeps the saturated indigo→violet (it pops on white); dark mode wants
+   the same identity but quieter, with a halo that says "alive". */
+.dark .avatar-ai {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.05), 0 0 24px rgba(124, 119, 246, 0.18);
+}
+
+/* Composer focus glow — soft halo, no harsh ring */
+.dark .composer-shell:focus-within {
+  box-shadow: 0 0 0 1px var(--d-border-strong), 0 0 32px rgba(255, 255, 255, 0.03);
+}
+
+/* Message body lift: in dark mode the user bubble and assistant area should
+   sit on the canvas with very subtle elevation, not full surface contrast. */
+.dark .max-w-\[85\%\].bg-slate-100 { background-color: var(--d-surface-2) !important; }
 
 /* ---------- Section headers in the sidebar / panels ---------- */
 .eyebrow {

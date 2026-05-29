@@ -21,3 +21,11 @@ zoom-prep.md
 sample_data/jenny-sources/hipaa/mitre-sample.zip
 sample_data/business_multidomain.db
 sample_data/jenny-sources/accounting/
+
+# Claude Code local agent state
+.claude/
+
+# Slide deck binary outputs (regenerable from demo/slides/jenny-demo.md via marp-cli)
+demo/slides/*.pdf
+demo/slides/*.pptx
+demo/slides/*.html
