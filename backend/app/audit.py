@@ -26,6 +26,16 @@ def init() -> None:
                 latency_ms INTEGER
             )"""
         )
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                vote TEXT NOT NULL,
+                question TEXT,
+                answer_preview TEXT,
+                reason TEXT
+            )"""
+        )
 
 
 def log_query(question: str, result: dict, latency_ms: int) -> None:
@@ -41,6 +51,14 @@ def log_query(question: str, result: dict, latency_ms: int) -> None:
                 json.dumps(result.get("citations", []), default=str),
                 latency_ms,
             ),
+        )
+
+
+def log_feedback(vote: str, question: str, answer: str, reason: str | None = None) -> None:
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO feedback (ts, vote, question, answer_preview, reason) VALUES (?,?,?,?,?)",
+            (time.time(), vote, question, (answer or "")[:500], reason),
         )
 
 

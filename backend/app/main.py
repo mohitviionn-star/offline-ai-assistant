@@ -33,9 +33,22 @@ async def _startup() -> None:
         pass
 
 
+class HistoryTurn(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
 class QueryIn(BaseModel):
     question: str
     model: str | None = None  # override OLLAMA_MODEL per request (e.g. "llama3.2:1b")
+    history: list[HistoryTurn] | None = None  # prior turns for multi-turn context
+
+
+class FeedbackIn(BaseModel):
+    vote: str  # "up" or "down"
+    question: str
+    answer: str
+    reason: str | None = None
 
 
 @app.get("/health")
@@ -113,7 +126,8 @@ async def get_document(filename: str) -> FileResponse:
 @app.post("/query")
 async def query(body: QueryIn) -> dict:
     t0 = time.time()
-    result = await run_answer(body.question, model=body.model)
+    history = [h.model_dump() for h in body.history] if body.history else None
+    result = await run_answer(body.question, model=body.model, history=history)
     latency = int((time.time() - t0) * 1000)
     result["latency_ms"] = latency
     result["model_used"] = body.model or settings.ollama_model
@@ -129,12 +143,14 @@ async def query_stream(body: QueryIn):
       event: token  data: {text}
       event: done   data: {confidence, latency_ms, fast_path?, gated?}
     """
+    history = [h.model_dump() for h in body.history] if body.history else None
+
     async def gen():
         accumulated_text = []
         meta_payload = {}
         done_payload = {}
         try:
-            async for event_type, payload in run_answer_stream(body.question, model=body.model):
+            async for event_type, payload in run_answer_stream(body.question, model=body.model, history=history):
                 if event_type == "plan":
                     yield f"event: plan\ndata: {json.dumps(payload, default=str)}\n\n"
                 elif event_type == "step":
@@ -148,6 +164,8 @@ async def query_stream(body: QueryIn):
                 elif event_type == "done":
                     done_payload = payload
                     yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+                elif event_type == "followups":
+                    yield f"event: followups\ndata: {json.dumps(payload)}\n\n"
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
         finally:
@@ -178,3 +196,11 @@ async def query_stream(body: QueryIn):
 @app.get("/audit")
 async def get_audit(limit: int = 50) -> dict:
     return {"queries": audit.recent(limit)}
+
+
+@app.post("/feedback")
+async def feedback(body: FeedbackIn) -> dict:
+    if body.vote not in ("up", "down"):
+        raise HTTPException(400, "vote must be 'up' or 'down'")
+    audit.log_feedback(body.vote, body.question, body.answer, body.reason)
+    return {"ok": True}

@@ -1,22 +1,142 @@
 import React, { useEffect, useRef, useState } from "react";
-import { getHealth, getSchema, ingestPdf, listDocuments, listModels, postQuery, streamQuery } from "./api";
+import { getHealth, getSchema, listDocuments, listModels, postFeedback, postQuery, streamQuery } from "./api";
 import Chat from "./components/Chat.jsx";
 import PdfModal from "./components/PdfModal.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import SourcePanel from "./components/SourcePanel.jsx";
 
+// Convert the UI message list into the planner/answer history payload.
+// Cap at the last 6 messages (≈3 turns) and skip messages that didn't produce
+// a real answer (stopped, refused with no content).
+function buildHistoryPayload(msgs) {
+  const out = [];
+  for (const m of msgs) {
+    if (m.role === "user") {
+      out.push({ role: "user", content: m.text || "" });
+    } else if (m.role === "assistant") {
+      const content = (m.answer || "").trim();
+      if (!content) continue; // skip empty assistant turns (stopped before any text)
+      out.push({ role: "assistant", content });
+    }
+  }
+  return out.slice(-6);
+}
+
+const STORAGE_KEY_CONVS = "convs:v1";
+const STORAGE_KEY_ACTIVE = "convs:v1:active";
+
+function makeNewConversation() {
+  return {
+    id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    title: null, // null = auto-derive from first user message
+    messages: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+function deriveTitle(messages) {
+  const firstUser = messages.find((m) => m.role === "user");
+  if (!firstUser?.text) return null;
+  const t = firstUser.text.trim().replace(/\s+/g, " ");
+  return t.length > 60 ? t.slice(0, 60).trim() + "…" : t;
+}
+
 export default function App() {
-  const [messages, setMessages] = useState([]);
+  const [conversations, setConversations] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_CONVS) || "null");
+      if (Array.isArray(stored) && stored.length) return stored;
+    } catch {}
+    return [makeNewConversation()];
+  });
+  const [activeId, setActiveId] = useState(() => {
+    return localStorage.getItem(STORAGE_KEY_ACTIVE) || null;
+  });
+
+  // Persist conversations + active id.
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_CONVS, JSON.stringify(conversations)); } catch {}
+  }, [conversations]);
+  useEffect(() => {
+    if (activeId) localStorage.setItem(STORAGE_KEY_ACTIVE, activeId);
+  }, [activeId]);
+
+  // Keep activeId pointing at a real conversation.
+  useEffect(() => {
+    if (!activeId || !conversations.find((c) => c.id === activeId)) {
+      setActiveId(conversations[0]?.id || null);
+    }
+  }, [conversations, activeId]);
+
+  const activeConv = conversations.find((c) => c.id === activeId);
+  const messages = activeConv?.messages || [];
+
+  // Updates the messages of the active conversation. Mirrors React's setState
+  // signature so the rest of the code reads naturally.
+  function setMessages(updater) {
+    setConversations((cs) =>
+      cs.map((c) => {
+        if (c.id !== activeId) return c;
+        const next = typeof updater === "function" ? updater(c.messages) : updater;
+        return {
+          ...c,
+          messages: next,
+          title: c.title || deriveTitle(next),
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  }
+
   const [pending, setPending] = useState(false);
   const [health, setHealth] = useState(null);
   const [schema, setSchema] = useState("");
   const [docs, setDocs] = useState([]);
   const [activeSource, setActiveSource] = useState(null);
   const [pdfModal, setPdfModal] = useState(null);
-  const [uploadStatus, setUploadStatus] = useState(null);
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState(null);  // null = backend default
-  const fileRef = useRef(null);
+  const abortRef = useRef(null);
+
+  function onStop() {
+    abortRef.current?.abort();
+  }
+
+  function onNewConversation() {
+    abortRef.current?.abort();
+    const c = makeNewConversation();
+    setConversations((cs) => [c, ...cs]);
+    setActiveId(c.id);
+    setActiveSource(null);
+  }
+
+  function onSelectConversation(id) {
+    if (id === activeId) return;
+    abortRef.current?.abort();
+    setActiveId(id);
+    setActiveSource(null);
+  }
+
+  function onRenameConversation(id, title) {
+    const t = (title || "").trim().slice(0, 80);
+    if (!t) return;
+    setConversations((cs) =>
+      cs.map((c) => (c.id === id ? { ...c, title: t, updatedAt: Date.now() } : c))
+    );
+  }
+
+  function onDeleteConversation(id) {
+    setConversations((cs) => {
+      const filtered = cs.filter((c) => c.id !== id);
+      return filtered.length ? filtered : [makeNewConversation()];
+    });
+    if (id === activeId) {
+      abortRef.current?.abort();
+      setActiveId(null); // the keep-active effect picks the next one
+      setActiveSource(null);
+    }
+  }
 
   function handleCiteClick(c) {
     // Both docs and SQL open in the right-side evidence panel.
@@ -42,20 +162,39 @@ export default function App() {
     refresh().catch(() => {});
   }, []);
 
-  async function onAsk(question) {
+  async function onAsk(question, opts = {}) {
     if (!question.trim()) return;
-    setMessages((m) => [...m, { role: "user", text: question }]);
+    const { replaceIdx = null } = opts;
     setPending(true);
 
-    // Add a placeholder assistant message that we'll mutate as tokens stream in.
+    // Build history from completed exchanges BEFORE this turn.
+    // For regenerate: take everything before the assistant slot we're replacing.
+    // For a fresh ask: take all messages so far.
+    const cutoff = replaceIdx !== null ? replaceIdx - 1 : messages.length;
+    const history = buildHistoryPayload(messages.slice(0, cutoff));
+
+    // For regenerate: reset the existing assistant message in place (keep the
+    // user message above it). For a fresh ask: append user + assistant placeholder.
     let assistantIdx;
-    setMessages((m) => {
-      assistantIdx = m.length;
-      return [
-        ...m,
-        { role: "assistant", answer: "", citations: [], confidence: null, streaming: true },
-      ];
-    });
+    if (replaceIdx !== null) {
+      assistantIdx = replaceIdx;
+      setMessages((m) =>
+        m.map((msg, i) =>
+          i === assistantIdx
+            ? { role: "assistant", answer: "", citations: [], confidence: null, streaming: true }
+            : msg
+        )
+      );
+    } else {
+      setMessages((m) => [...m, { role: "user", text: question }]);
+      setMessages((m) => {
+        assistantIdx = m.length;
+        return [
+          ...m,
+          { role: "assistant", answer: "", citations: [], confidence: null, streaming: true },
+        ];
+      });
+    }
 
     const update = (patch) =>
       setMessages((m) => m.map((msg, i) => (i === assistantIdx ? { ...msg, ...patch } : msg)));
@@ -65,14 +204,19 @@ export default function App() {
       );
 
     const t0 = Date.now();
+    abortRef.current = new AbortController();
     try {
       await streamQuery(question, {
         model: selectedModel,
+        history,
+        signal: abortRef.current.signal,
         onPlan: (plan) => update({
           route: plan.route,
           rationale: plan.rationale,
           plannedSql: plan.sql_query,
           plannedDocsQuery: plan.docs_query,
+          clarification: plan.clarification || "",
+          clarification_options: plan.clarification_options || [],
           phase: "retrieving",
           steps: [{ kind: "plan", status: "done", t: Date.now() - t0 }],
         }),
@@ -99,31 +243,60 @@ export default function App() {
           latency_ms: done.latency_ms,
           fast_path: done.fast_path,
           gated: done.gated,
+          clarification_required: done.clarification_required,
+          followups_pending: !!done.followups_pending,
           streaming: false,
           phase: "done",
         }),
+        onFollowups: (data) => update({ followups: data.questions || [], followups_pending: false }),
         onError: (e) => update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false, phase: "error" }),
       });
     } catch (e) {
       update({ answer: `Error: ${e.message}`, confidence: "low", streaming: false });
     } finally {
+      // If the message is still marked as streaming, this was an abort — finalize it.
+      setMessages((m) =>
+        m.map((msg, i) =>
+          i === assistantIdx && msg.streaming
+            ? { ...msg, streaming: false, stopped: true, followups_pending: false, phase: "stopped" }
+            : msg
+        )
+      );
+      abortRef.current = null;
       setPending(false);
     }
   }
 
-  async function onFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadStatus(`Ingesting ${file.name}…`);
-    try {
-      const res = await ingestPdf(file);
-      setUploadStatus(`Ingested ${res.filename} (${res.chunks} chunks, ${res.pages} pages)`);
-      await refresh();
-    } catch (err) {
-      setUploadStatus(`Upload failed: ${err.message}`);
-    } finally {
-      if (fileRef.current) fileRef.current.value = "";
-      setTimeout(() => setUploadStatus(null), 4000);
+  async function onRegenerate(assistantIdx) {
+    const userMsg = messages[assistantIdx - 1];
+    if (!userMsg || userMsg.role !== "user") return;
+    await onAsk(userMsg.text, { replaceIdx: assistantIdx });
+  }
+
+  async function onEditUserMessage(userIdx, newText) {
+    if (!newText.trim()) return;
+    const assistantIdx = userIdx + 1;
+    // Update user message text in place, then regenerate the assistant answer.
+    setMessages((m) =>
+      m.map((msg, i) => (i === userIdx ? { ...msg, text: newText } : msg))
+    );
+    await onAsk(newText, { replaceIdx: assistantIdx });
+  }
+
+  async function onFeedback(assistantIdx, vote) {
+    const msg = messages[assistantIdx];
+    const userMsg = messages[assistantIdx - 1];
+    if (!msg || !userMsg) return;
+    // If they click the same vote again, treat it as a clear.
+    const next = msg.vote === vote ? null : vote;
+    setMessages((m) => m.map((x, i) => (i === assistantIdx ? { ...x, vote: next } : x)));
+    if (next) {
+      try {
+        await postFeedback({ vote: next, question: userMsg.text, answer: msg.answer || "" });
+      } catch {
+        // Revert on failure.
+        setMessages((m) => m.map((x, i) => (i === assistantIdx ? { ...x, vote: msg.vote || null } : x)));
+      }
     }
   }
 
@@ -133,50 +306,38 @@ export default function App() {
         health={health}
         schema={schema}
         docs={docs}
-        uploadStatus={uploadStatus}
-        onUploadClick={() => fileRef.current?.click()}
+        conversations={conversations}
+        activeConversationId={activeId}
+        onNewConversation={onNewConversation}
+        onSelectConversation={onSelectConversation}
+        onRenameConversation={onRenameConversation}
+        onDeleteConversation={onDeleteConversation}
       />
-      <input ref={fileRef} type="file" accept="application/pdf" className="hidden" onChange={onFile} />
       <main className="flex-1 flex min-w-0">
         <div className="flex-1 flex flex-col min-w-0">
-          <header className="h-14 flex items-center justify-between pl-6 pr-4 border-b border-slate-200 bg-white">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-7 h-7 rounded-md bg-brand-900 text-white flex items-center justify-center text-xs font-bold tracking-tight shrink-0">AI</div>
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-ink tracking-tight leading-tight">
-                  Grounded Assistant
-                </div>
-                <div className="text-[11px] text-slate-500 leading-tight">
-                  Hybrid retrieval · grounded citations · on-prem LLM
-                </div>
+          <header className="h-12 flex items-center justify-between pl-6 pr-4 border-b border-slate-200 bg-white">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="avatar-ai w-6 h-6 rounded-lg !text-[9px]">AI</div>
+              <div className="text-[13px] font-semibold text-ink tracking-tight leading-tight">
+                Grounded Assistant
               </div>
             </div>
-            {models.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="eyebrow">Model</span>
-                <select
-                  value={selectedModel || ""}
-                  onChange={(e) => setSelectedModel(e.target.value || null)}
-                  disabled={pending}
-                  className="text-xs px-2.5 py-1.5 rounded-md border border-slate-300 bg-white text-slate-800
-                             focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent
-                             disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-                  title="Local LLM used for this query"
-                >
-                  {models.map((m) => (
-                    <option key={m.name} value={m.name}>
-                      {m.label || m.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div className="text-[10.5px] text-slate-400 hidden md:block">
+              Hybrid retrieval · on-prem LLM
+            </div>
           </header>
           <Chat
             messages={messages}
             pending={pending}
             onAsk={onAsk}
+            onStop={onStop}
+            onRegenerate={onRegenerate}
+            onEditUserMessage={onEditUserMessage}
+            onFeedback={onFeedback}
             onCiteClick={handleCiteClick}
+            models={models}
+            selectedModel={selectedModel}
+            onSelectModel={setSelectedModel}
           />
         </div>
         <SourcePanel source={activeSource} onClose={() => setActiveSource(null)} onOpenPdf={openFullPdf} />

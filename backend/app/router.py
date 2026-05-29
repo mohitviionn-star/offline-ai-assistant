@@ -43,13 +43,21 @@ SQL GENERATION RULES (apply when route is "sql" or "hybrid"):
 - Use only SQLite-compatible functions. NEVER use PostgreSQL-only functions (JSON_AGG, jsonb_agg, row_to_json, ARRAY_AGG). Use sqlite functions like COUNT, SUM, GROUP_CONCAT instead.
 - If a SQL query is not appropriate, leave "sql_query" as an empty string.
 
+CLARIFICATION (rare — set ONLY when truly needed):
+- Set "clarification" to a question for the user ONLY when the question is genuinely ambiguous AND the answer would meaningfully differ across valid interpretations. Examples: "show me the missed payments" (whose? alimony or rent?), "how many cases" (status? year?).
+- Do NOT use clarification just because the question is broad. Most questions can be answered with the best interpretation.
+- When clarification is set, the system skips SQL/docs and asks the user instead.
+- Default: empty string ("") — meaning no clarification needed.
+
 OUTPUT ONLY this exact JSON shape (no prose, no markdown fences):
 {
   "route": "docs" | "sql" | "hybrid",
   "docs_query": "<short keyword query or null>",
   "sql_query": "<a SQLite SELECT query, or empty string if not sql/hybrid>",
   "sql_rationale": "<one short line explaining what the SQL does, or empty>",
-  "rationale": "<one short line for the overall routing decision>"
+  "rationale": "<one short line for the overall routing decision>",
+  "clarification": "<a question for the user, or empty string>",
+  "clarification_options": ["<short option label>", "..."]
 }
 
 FEW-SHOT EXAMPLES (schema: residents, medications, pt_approvals, falls, clients, cases, alimony_payments, treatments, properties):
@@ -90,6 +98,9 @@ Q: "What is the security deposit policy for a 2-year lease?"
 Q: "What is the late fee for rent paid 10 days late?"
 {"route":"docs","docs_query":"late fee policy rent","sql_query":"","sql_rationale":"","rationale":"policy parameter conditioned on a hypothetical — no specific tenant or lease referenced, so docs only"}
 
+Q: "Show me the missed payments"
+{"route":"docs","docs_query":null,"sql_query":"","sql_rationale":"","rationale":"ambiguous — needs clarification","clarification":"Whose missed payments, and which kind?","clarification_options":["Michael Rosenberg — missed alimony","Devon Patel — missed rent","All tenants — missed rent"]}
+
 The user's question + database schema follow.
 """
 
@@ -128,18 +139,49 @@ READING SQL RESULTS — READ LITERALLY
 
 REFUSAL — use ONLY when neither source has relevant evidence:
 "I don't have enough grounded information to answer that. Try rephrasing or upload a relevant document."
+
+MULTI-TURN — if the context block contains a "Recent conversation" transcript above the EVIDENCE section, it is there only to resolve pronouns ("she", "his", "that case") and continuity references. Do NOT cite citations from prior assistant turns — only cite from the current EVIDENCE block. Do NOT repeat the prior assistant's answer; just respond to the current question.
 """
+
+
+# Cap on how many prior turns we forward to the LLMs. Older context is dropped.
+HISTORY_TURN_CAP = 6  # roughly 3 user/assistant pairs
+ASSISTANT_HISTORY_PREVIEW_CHARS = 240  # truncate past answers so we don't bloat tokens
+
+
+def _format_history(history: list[dict] | None) -> str:
+    """Render recent conversation as a compact transcript. Assistant responses
+    are truncated so the prompt doesn't blow up on long answers. Returns "" if
+    history is empty/None — caller can branch cheaply."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history[-HISTORY_TURN_CAP:]:
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if not content or role not in ("user", "assistant"):
+            continue
+        if role == "assistant" and len(content) > ASSISTANT_HISTORY_PREVIEW_CHARS:
+            content = content[:ASSISTANT_HISTORY_PREVIEW_CHARS].rstrip() + "…"
+        lines.append(f"{'USER' if role == 'user' else 'ASSISTANT'}: {content}")
+    return "Recent conversation (for context, resolve pronouns from here):\n" + "\n".join(lines)
 
 
 # ----------------------------------------------------------------------
 # Planning + SQL gen in ONE LLM call
 # ----------------------------------------------------------------------
-async def plan_and_sql(question: str, model: str | None = None) -> dict[str, Any]:
+async def plan_and_sql(question: str, model: str | None = None, history: list[dict] | None = None) -> dict[str, Any]:
     """Single LLM call that returns route + docs_query + sql_query (if applicable).
     Replaces the previous two-call sequence of plan() + nl_to_sql()."""
     client = OllamaClient(model=model)
     schema = schema_summary(include_samples=False)  # terse schema — faster prefill
-    user_msg = f"Database schema:\n{schema}\n\nUser question: {question}"
+    history_block = _format_history(history)
+    user_msg_parts = []
+    if history_block:
+        user_msg_parts.append(history_block)
+    user_msg_parts.append(f"Database schema:\n{schema}")
+    user_msg_parts.append(f"User question: {question}")
+    user_msg = "\n\n".join(user_msg_parts)
     resp = await client.chat(
         messages=[
             {"role": "system", "content": PLAN_SYSTEM},
@@ -159,6 +201,11 @@ async def plan_and_sql(question: str, model: str | None = None) -> dict[str, Any
     parsed.setdefault("sql_query", "")
     parsed.setdefault("sql_rationale", "")
     parsed.setdefault("rationale", "")
+    parsed.setdefault("clarification", "")
+    parsed.setdefault("clarification_options", [])
+    # Coerce option list defensively — LLM sometimes returns null or string.
+    if not isinstance(parsed["clarification_options"], list):
+        parsed["clarification_options"] = []
 
     # SAFETY UPGRADE: if router chose docs-only but the question references a table entity,
     # upgrade to hybrid. SQL won't be auto-filled but the existing flow can still surface evidence.
@@ -433,9 +480,9 @@ def _deterministic_sql_answer(sql_result: dict, question: str) -> str:
 # ----------------------------------------------------------------------
 # Main answer pipeline
 # ----------------------------------------------------------------------
-async def answer(question: str, model: str | None = None) -> dict[str, Any]:
+async def answer(question: str, model: str | None = None, history: list[dict] | None = None) -> dict[str, Any]:
     import asyncio
-    p = await plan_and_sql(question, model=model)
+    p = await plan_and_sql(question, model=model, history=history)
     route = p["route"]
 
     # Run SQL execution + Qdrant search in parallel — they are independent.
@@ -483,6 +530,9 @@ async def answer(question: str, model: str | None = None) -> dict[str, Any]:
 
     # Otherwise, compose with the answer LLM.
     context_blocks = []
+    history_block = _format_history(history)
+    if history_block:
+        context_blocks.append(history_block)
     if docs:
         context_blocks.append("DOCUMENT EVIDENCE:\n" + _format_doc_context(docs))
     if sql_result:
@@ -515,7 +565,7 @@ async def answer(question: str, model: str | None = None) -> dict[str, Any]:
     }
 
 
-async def answer_stream(question: str, model: str | None = None):
+async def answer_stream(question: str, model: str | None = None, history: list[dict] | None = None):
     """Streaming version of answer(): yields (event_type, data) tuples.
     Event types in order:
       - 'plan'  → emitted RIGHT AFTER step 1 (route + planned sql/docs query). UI
@@ -530,7 +580,7 @@ async def answer_stream(question: str, model: str | None = None):
     t0 = time.time()
 
     # --- Step 1: plan + sql gen (one LLM call) ---
-    p = await plan_and_sql(question, model=model)
+    p = await plan_and_sql(question, model=model, history=history)
     route = p["route"]
 
     # Emit `plan` event immediately so the UI can render route + SQL preview
@@ -541,7 +591,20 @@ async def answer_stream(question: str, model: str | None = None):
         "sql_query": p.get("sql_query", ""),
         "sql_rationale": p.get("sql_rationale", ""),
         "docs_query": p.get("docs_query"),
+        "clarification": p.get("clarification", ""),
+        "clarification_options": p.get("clarification_options", []),
     })
+
+    # --- Short-circuit on clarification ---
+    # If the planner asked for clarification, skip retrieval + answer LLM entirely.
+    # The UI renders the clarification question with quick-reply chips.
+    if p.get("clarification"):
+        yield ("done", {
+            "confidence": "clarification",
+            "clarification_required": True,
+            "latency_ms": int((time.time() - t0) * 1000),
+        })
+        return
 
     # --- Step 2 + 3: SQL execution + Qdrant search IN PARALLEL ---
     # SQL is fast (<100ms), embedding-search is slow (~1-9s). Running them
@@ -645,14 +708,25 @@ async def answer_stream(question: str, model: str | None = None):
     # `not docs`) so weak speculative-doc hits don't push us off the fast path.
     if route == "sql" and strong_sql and not strong_docs:
         yield ("meta", meta)
-        yield ("token", _deterministic_sql_answer(sql_result, question))
-        yield ("done", {"confidence": "medium", "fast_path": True, "latency_ms": int((time.time() - t0) * 1000)})
+        fast_answer = _deterministic_sql_answer(sql_result, question)
+        yield ("token", fast_answer)
+        yield ("done", {
+            "confidence": "medium",
+            "fast_path": True,
+            "latency_ms": int((time.time() - t0) * 1000),
+            "followups_pending": True,
+        })
+        followups = await _generate_followups(question, fast_answer, model=model)
+        yield ("followups", {"questions": followups})
         return
 
     # Otherwise, stream the answer LLM call.
     yield ("meta", meta)
 
     context_blocks = []
+    history_block = _format_history(history)
+    if history_block:
+        context_blocks.append(history_block)
     if docs:
         context_blocks.append("DOCUMENT EVIDENCE:\n" + _format_doc_context(docs))
     if sql_result:
@@ -676,7 +750,56 @@ async def answer_stream(question: str, model: str | None = None):
 
     full_text = "".join(accumulated).strip()
     confidence = _confidence(full_text, docs, sql_result)
-    yield ("done", {"confidence": confidence, "latency_ms": int((time.time() - t0) * 1000)})
+    will_try_followups = confidence != "refused"
+    yield ("done", {
+        "confidence": confidence,
+        "latency_ms": int((time.time() - t0) * 1000),
+        "followups_pending": will_try_followups,
+    })
+
+    # Follow-up suggestions — best-effort, after the answer is fully streamed.
+    # Skip if we refused, since there's no useful answer to build on.
+    if will_try_followups:
+        followups = await _generate_followups(question, full_text, model=model)
+        yield ("followups", {"questions": followups})
+
+
+FOLLOWUP_SYSTEM = """Given a user's question and the assistant's answer, suggest 3 short follow-up questions the user might naturally ask next.
+
+RULES:
+- Each follow-up is a complete, self-contained question under 80 characters.
+- Build on entities/facts mentioned in the answer (specific people, dates, amounts, document names).
+- Vary the angle: one drills deeper, one broadens scope, one explores a related concept.
+- Skip generic questions like "tell me more" or "any other details?".
+- If you cannot suggest 3 useful follow-ups, return fewer or an empty list.
+
+OUTPUT ONLY a JSON object: {"questions": ["...", "...", "..."]}
+"""
+
+
+async def _generate_followups(question: str, answer: str, model: str | None = None) -> list[str]:
+    """One small LLM call to suggest 3 follow-up questions.
+    Best-effort — returns [] on any failure so the main path is unaffected."""
+    if not answer or len(answer) < 20:
+        return []
+    try:
+        client = OllamaClient(model=model)
+        resp = await client.chat(
+            messages=[
+                {"role": "system", "content": FOLLOWUP_SYSTEM},
+                {"role": "user", "content": f"Question: {question}\n\nAnswer: {answer}"},
+            ],
+            temperature=0.4,
+            format="json",
+        )
+        raw = resp.get("message", {}).get("content", "{}")
+        parsed = json.loads(raw)
+        qs = parsed.get("questions", [])
+        if not isinstance(qs, list):
+            return []
+        return [str(q).strip() for q in qs if isinstance(q, (str, int, float)) and str(q).strip()][:3]
+    except Exception:
+        return []
 
 
 def _build_citations(docs: list[dict], sql_result: dict) -> list[dict]:
