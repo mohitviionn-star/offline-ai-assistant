@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { getHealth, getSchema, ingestPdf, listDocuments, listModels, postQuery, streamQuery } from "./api";
+import { getHealth, getSchema, ingestPdf, listDocuments, listModels, postFeedback, postQuery, streamQuery } from "./api";
 import Chat from "./components/Chat.jsx";
 import PdfModal from "./components/PdfModal.jsx";
 import Sidebar from "./components/Sidebar.jsx";
@@ -47,20 +47,33 @@ export default function App() {
     refresh().catch(() => {});
   }, []);
 
-  async function onAsk(question) {
+  async function onAsk(question, opts = {}) {
     if (!question.trim()) return;
-    setMessages((m) => [...m, { role: "user", text: question }]);
+    const { replaceIdx = null } = opts;
     setPending(true);
 
-    // Add a placeholder assistant message that we'll mutate as tokens stream in.
+    // For regenerate: reset the existing assistant message in place (keep the
+    // user message above it). For a fresh ask: append user + assistant placeholder.
     let assistantIdx;
-    setMessages((m) => {
-      assistantIdx = m.length;
-      return [
-        ...m,
-        { role: "assistant", answer: "", citations: [], confidence: null, streaming: true },
-      ];
-    });
+    if (replaceIdx !== null) {
+      assistantIdx = replaceIdx;
+      setMessages((m) =>
+        m.map((msg, i) =>
+          i === assistantIdx
+            ? { role: "assistant", answer: "", citations: [], confidence: null, streaming: true }
+            : msg
+        )
+      );
+    } else {
+      setMessages((m) => [...m, { role: "user", text: question }]);
+      setMessages((m) => {
+        assistantIdx = m.length;
+        return [
+          ...m,
+          { role: "assistant", answer: "", citations: [], confidence: null, streaming: true },
+        ];
+      });
+    }
 
     const update = (patch) =>
       setMessages((m) => m.map((msg, i) => (i === assistantIdx ? { ...msg, ...patch } : msg)));
@@ -132,6 +145,29 @@ export default function App() {
     }
   }
 
+  async function onRegenerate(assistantIdx) {
+    const userMsg = messages[assistantIdx - 1];
+    if (!userMsg || userMsg.role !== "user") return;
+    await onAsk(userMsg.text, { replaceIdx: assistantIdx });
+  }
+
+  async function onFeedback(assistantIdx, vote) {
+    const msg = messages[assistantIdx];
+    const userMsg = messages[assistantIdx - 1];
+    if (!msg || !userMsg) return;
+    // If they click the same vote again, treat it as a clear.
+    const next = msg.vote === vote ? null : vote;
+    setMessages((m) => m.map((x, i) => (i === assistantIdx ? { ...x, vote: next } : x)));
+    if (next) {
+      try {
+        await postFeedback({ vote: next, question: userMsg.text, answer: msg.answer || "" });
+      } catch {
+        // Revert on failure.
+        setMessages((m) => m.map((x, i) => (i === assistantIdx ? { ...x, vote: msg.vote || null } : x)));
+      }
+    }
+  }
+
   async function onFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -176,6 +212,8 @@ export default function App() {
             pending={pending}
             onAsk={onAsk}
             onStop={onStop}
+            onRegenerate={onRegenerate}
+            onFeedback={onFeedback}
             onCiteClick={handleCiteClick}
             models={models}
             selectedModel={selectedModel}

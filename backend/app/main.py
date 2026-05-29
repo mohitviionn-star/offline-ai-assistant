@@ -38,6 +38,13 @@ class QueryIn(BaseModel):
     model: str | None = None  # override OLLAMA_MODEL per request (e.g. "llama3.2:1b")
 
 
+class FeedbackIn(BaseModel):
+    vote: str  # "up" or "down"
+    question: str
+    answer: str
+    reason: str | None = None
+
+
 @app.get("/health")
 async def health() -> dict:
     ollama = OllamaClient()
@@ -180,3 +187,11 @@ async def query_stream(body: QueryIn):
 @app.get("/audit")
 async def get_audit(limit: int = 50) -> dict:
     return {"queries": audit.recent(limit)}
+
+
+@app.post("/feedback")
+async def feedback(body: FeedbackIn) -> dict:
+    if body.vote not in ("up", "down"):
+        raise HTTPException(400, "vote must be 'up' or 'down'")
+    audit.log_feedback(body.vote, body.question, body.answer, body.reason)
+    return {"ok": True}

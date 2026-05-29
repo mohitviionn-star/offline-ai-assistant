@@ -21,7 +21,7 @@ function groupedPrompts() {
   return Object.entries(groups);
 }
 
-export default function Chat({ messages, pending, onAsk, onStop, onCiteClick, models, selectedModel, onSelectModel, onUploadClick, uploadStatus }) {
+export default function Chat({ messages, pending, onAsk, onStop, onRegenerate, onFeedback, onCiteClick, models, selectedModel, onSelectModel, onUploadClick, uploadStatus }) {
   const [input, setInput] = useState("");
   const endRef = useRef(null);
   const textareaRef = useRef(null);
@@ -64,7 +64,17 @@ export default function Chat({ messages, pending, onAsk, onStop, onCiteClick, mo
         <div className="max-w-3xl mx-auto space-y-7">
           {messages.length === 0 && <EmptyState onAsk={onAsk} />}
           {messages.map((m, i) => (
-            <Message key={i} msg={m} onCiteClick={onCiteClick} onAsk={onAsk} />
+            <Message
+              key={i}
+              msg={m}
+              idx={i}
+              isLast={i === messages.length - 1}
+              pending={pending}
+              onCiteClick={onCiteClick}
+              onAsk={onAsk}
+              onRegenerate={onRegenerate}
+              onFeedback={onFeedback}
+            />
           ))}
           <div ref={endRef} />
         </div>
@@ -209,7 +219,7 @@ function EmptyState({ onAsk }) {
   );
 }
 
-function Message({ msg, onCiteClick, onAsk }) {
+function Message({ msg, idx, isLast, pending, onCiteClick, onAsk, onRegenerate, onFeedback }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
@@ -229,6 +239,8 @@ function Message({ msg, onCiteClick, onAsk }) {
   const showProgressHeader = isStreaming && !(msg.answer && msg.answer.length > 0) && !showClarification;
   const cited = extractCitedInOrder(msg.answer || "", msg.citations || []);
   const followups = Array.isArray(msg.followups) ? msg.followups : [];
+  const wasStopped = !!msg.stopped;
+  const stoppedEmpty = wasStopped && !(msg.answer && msg.answer.length > 0);
 
   return (
     <div className="flex gap-3 items-start">
@@ -242,21 +254,36 @@ function Message({ msg, onCiteClick, onAsk }) {
             options={msg.clarification_options || []}
             onAsk={onAsk}
           />
+        ) : stoppedEmpty ? (
+          <StoppedNotice />
         ) : (
-          <RenderAnswer
-            text={msg.answer || ""}
-            cited={cited}
-            onCiteClick={onCiteClick}
-            streaming={isStreaming}
-          />
+          <>
+            <RenderAnswer
+              text={msg.answer || ""}
+              cited={cited}
+              onCiteClick={onCiteClick}
+              streaming={isStreaming}
+            />
+            {wasStopped && <StoppedTag />}
+          </>
         )}
 
         {!isStreaming && !showClarification && cited.length > 0 && (
           <SourcesList cited={cited} onCiteClick={onCiteClick} />
         )}
-        {!isStreaming && !showClarification && msg.latency_ms && (
-          <div className="mt-3 flex items-center gap-2 flex-wrap">
-            <Badge latency={msg.latency_ms} />
+        {!isStreaming && !showClarification && (msg.latency_ms || wasStopped) && (
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
+            {msg.latency_ms && <Badge latency={msg.latency_ms} />}
+            <ActionRow
+              msg={msg}
+              cited={cited}
+              canRegenerate={isLast && !pending}
+              showCopy={!stoppedEmpty}
+              showFeedback={!stoppedEmpty}
+              onCopy={() => copyAnswerToClipboard(msg, cited)}
+              onRegenerate={() => onRegenerate?.(idx)}
+              onFeedback={(vote) => onFeedback?.(idx, vote)}
+            />
           </div>
         )}
         {!isStreaming && !showClarification && (followups.length > 0 || msg.followups_pending) && (
@@ -264,6 +291,28 @@ function Message({ msg, onCiteClick, onAsk }) {
         )}
       </div>
     </div>
+  );
+}
+
+function StoppedNotice() {
+  return (
+    <div className="flex items-center gap-2 text-[13px] text-slate-500 italic">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+        <rect x="6" y="6" width="12" height="12" rx="1.5" />
+      </svg>
+      Stopped before the answer started. Ask again to retry.
+    </div>
+  );
+}
+
+function StoppedTag() {
+  return (
+    <span className="inline-flex items-center gap-1 mt-1.5 text-[11px] text-slate-400 italic">
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+        <rect x="5" y="5" width="14" height="14" rx="1.5" />
+      </svg>
+      stopped — answer may be incomplete
+    </span>
   );
 }
 
@@ -478,6 +527,108 @@ function SourcesList({ cited, onCiteClick }) {
         })}
       </ol>
     </div>
+  );
+}
+
+function copyAnswerToClipboard(msg, cited) {
+  // Build a markdown blob: answer with [doc:...]/[sql:...] replaced by [N],
+  // then a Sources list.
+  const byKey = new Map(cited.map((c) => [c.key, c]));
+  const body = (msg.answer || "").replace(/\[(doc|sql):([^\]]+)\]/g, (_m, kind, label) => {
+    const entry = byKey.get(`${kind}:${label.trim()}`);
+    return entry ? `[${entry.n}]` : "";
+  });
+  const sources = cited.length
+    ? "\n\nSources:\n" + cited.map((c) => {
+        if (c.kind === "doc") return `[${c.n}] ${c.label}`;
+        const r = c.cite?.rationale;
+        return `[${c.n}] SQL${r ? ` — ${r}` : ""}`;
+      }).join("\n")
+    : "";
+  return navigator.clipboard.writeText(body.trim() + sources);
+}
+
+function ActionRow({ msg, cited, canRegenerate, showCopy = true, showFeedback = true, onCopy, onRegenerate, onFeedback }) {
+  const [copied, setCopied] = useState(false);
+  const vote = msg.vote || null;
+
+  async function handleCopy() {
+    try {
+      await onCopy();
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore — clipboard may be denied in insecure contexts
+    }
+  }
+
+  return (
+    <div className="inline-flex items-center gap-0.5">
+      {showCopy && (
+        <IconBtn
+          title={copied ? "Copied!" : "Copy answer"}
+          onClick={handleCopy}
+          active={copied}
+        >
+          {copied ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          )}
+        </IconBtn>
+      )}
+      {showFeedback && (
+        <>
+          <IconBtn
+            title="Helpful"
+            onClick={() => onFeedback?.("up")}
+            active={vote === "up"}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill={vote === "up" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+            </svg>
+          </IconBtn>
+          <IconBtn
+            title="Not helpful"
+            onClick={() => onFeedback?.("down")}
+            active={vote === "down"}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill={vote === "down" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
+            </svg>
+          </IconBtn>
+        </>
+      )}
+      {canRegenerate && (
+        <IconBtn title="Regenerate" onClick={onRegenerate}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          </svg>
+        </IconBtn>
+      )}
+    </div>
+  );
+}
+
+function IconBtn({ title, active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className={`inline-flex items-center justify-center w-6 h-6 rounded-md transition-colors
+        ${active
+          ? "bg-slate-100 text-ink"
+          : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"}`}
+    >
+      {children}
+    </button>
   );
 }
 
